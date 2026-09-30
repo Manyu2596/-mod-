@@ -1,0 +1,29 @@
+# 打包产物（放 Releases，不进仓库）
+dist/
+
+# 用户数据（含个人订阅列表 / 译文 / 版本基线）
+user_zh.json
+translations.json
+versions.json
+paths.json
+workshop_meta.json
+config_backup*.xml
+crashlogs/
+
+# 生成物
+report.html
+sorted.txt
+order.json
+conflicts.txt
+purpose.json
+server.port
+*.log
+*.err
+
+# 临时脚本
+_*.js
+_*.ps1
+
+# 系统
+.DS_Store
+Thumbs.db

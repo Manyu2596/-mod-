@@ -1,0 +1,723 @@
+/**
+ * 潜渊症 Mod 可视化管理（本地服务）
+ * 浏览器打开后可直接拖拽排序、勾选启用，点保存即写入游戏配置
+ * 只监听 127.0.0.1，不对外暴露
+ */
+
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { exec } = require('child_process');
+
+const lib = require('./sort.js');
+const { analyze, classify, loadEnabledIds, detectSeries, GAME_VERSION,
+    getPaths, refreshPaths, saveUserPaths, loadUserPaths } = lib;
+
+// 配置路径随探测结果变化，每次现取（支持运行时重新检测 / 手动改路径）
+function configPath() { return path.join(getPaths().GAME, 'config_player.xml'); }
+const UI = path.join(__dirname, 'ui.html');
+const TRANS = path.join(__dirname, 'translations.json');
+const ZH_PATH = path.join(__dirname, 'zh.json');
+const USER_ZH = path.join(__dirname, 'user_zh.json');
+const OLLAMA = 'http://127.0.0.1:11434';
+const MODEL = 'qwen25-14b-8k';
+const PORT_START = 9182;
+const PORT = process.env.BARO_PORT ? parseInt(process.env.BARO_PORT, 10) : PORT_START;
+
+// ---------- 名称翻译（走本地 Ollama，不联网） ----------
+function loadTrans() {
+    try { return JSON.parse(fs.readFileSync(TRANS, 'utf8')); } catch (e) { return {}; }
+}
+
+function hasChinese(s) { return /[\u4e00-\u9fa5]/.test(s); }
+
+function loadZh() {
+    try { return JSON.parse(fs.readFileSync(ZH_PATH, 'utf8')); } catch (e) { return {}; }
+}
+
+// 用户手动补的译文（优先级最高，不依赖任何模型）
+function loadUserZh() {
+    try { return JSON.parse(fs.readFileSync(USER_ZH, 'utf8')); } catch (e) { return {}; }
+}
+
+// 探测本地模型是否可用（避免没模型时报一堆红字）
+function ollamaReachable() {
+    return new Promise(resolve => {
+        const req = http.get(OLLAMA + '/api/tags', res => { res.resume(); resolve(res.statusCode === 200); });
+        req.on('error', () => resolve(false));
+        req.setTimeout(3000, () => { req.destroy(); resolve(false); });
+    });
+}
+
+function ollamaChat(prompt) {
+    const body = JSON.stringify({
+        model: MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        stream: false,
+        options: { temperature: 0.2 },
+    });
+    return new Promise((resolve, reject) => {
+        const req = http.request(OLLAMA + '/api/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+            },
+        }, res => {
+            let d = '';
+            res.on('data', c => { d += c; });
+            res.on('end', () => {
+                try { resolve(JSON.parse(d).message.content); }
+                catch (e) { reject(new Error('模型返回无法解析')); }
+            });
+        });
+        req.on('error', reject);
+        req.setTimeout(900000);
+        req.write(body);
+        req.end();
+    });
+}
+
+async function translateAll() {
+    if (!(await ollamaReachable())) {
+        throw new Error('未检测到本地 AI（Ollama 未运行）。当前 mod 的中文名/简介已内置，无需翻译；新订阅的 mod 可用每行右侧「译」按钮手动补充。');
+    }
+    const trans = loadTrans();
+    const zhAll = loadZh();
+    const userZh = loadUserZh();
+    const data = buildData();
+    const mods = data.active.concat(data.idle);
+
+    // 只有三个来源都没有“写过”的中文名时才需要翻译：手动译文 > 模型译文 > 内置表
+    const todo = mods.filter(m => {
+        const existing = (userZh[m.id] && userZh[m.id].zh) ||
+            trans[m.name] ||
+            (zhAll[m.id] && zhAll[m.id].zh);
+        return !existing;
+    }).map(m => m.name);
+
+    const skipped = mods.length - todo.length;
+    if (!todo.length) return { trans, added: 0, skipped };
+
+    const prompt =
+        '你是游戏模组名称翻译助手。把下列《潜渊症》(Barotrauma) 的模组名称翻译成中文。\n' +
+        '规则：只翻译名称本身；品牌名、角色名用音译或保留原文；不要意译专有名词；不要添加解释。\n' +
+        '只输出一个 JSON 对象，键是原始名称，值是中文译名。不要输出其他任何内容。\n\n' +
+        '待翻译：\n' + todo.map(n => '- ' + n).join('\n');
+
+    const out = await ollamaChat(prompt);
+    let obj;
+    try {
+        const s = out.indexOf('{');
+        const e = out.lastIndexOf('}');
+        obj = JSON.parse(out.slice(s, e + 1));
+    } catch (err) {
+        throw new Error('模型返回的不是合法 JSON');
+    }
+    Object.assign(trans, obj);
+    fs.writeFileSync(TRANS, JSON.stringify(trans, null, 2), 'utf8');
+    return { trans, added: Object.keys(obj).length, skipped };
+}
+
+// ---------- 读取当前配置中的 package ----------
+function readPackages() {
+    const cfg = configPath();
+    if (!fs.existsSync(cfg)) return [];   // 路径不对时不要崩，返回空让界面提示
+    const xml = fs.readFileSync(cfg, 'utf8');
+    const m = xml.match(/<regularpackages>([\s\S]*?)<\/regularpackages>/);
+    if (!m) return [];
+    const out = [];
+    const re = /<!--([\s\S]*?)-->|\s*(<package\s+[^>]*?\/>)/g;
+    let lastComment = '';
+    let r;
+    while ((r = re.exec(m[1])) !== null) {
+        if (r[1]) { lastComment = r[1].trim(); continue; }
+        const tag = r[2];
+        const idm = /Installed[/\\](\d+)[/\\]/i.exec(tag);
+        if (!idm) continue;
+        out.push({ id: idm[1], name: lastComment, tag });
+        lastComment = '';
+    }
+    return out;
+}
+
+// ---------- 扫描所有 mod ----------
+function buildData() {
+    const enabledIds = loadEnabledIds();
+    const pkgs = readPackages();
+    const inConfig = {};
+    pkgs.forEach(p => { inConfig[p.id] = p.tag; });
+    const trans = loadTrans();
+    const zhAll = loadZh();
+    const userZh = loadUserZh();
+
+    const W = getPaths().WORKSHOP;
+    const mods = [];
+    if (!fs.existsSync(W)) { /* 工坊目录不存在：返回空列表，由界面提示设置路径 */ }
+    else fs.readdirSync(W).forEach(id => {
+        if (!fs.statSync(path.join(W, id)).isDirectory()) return;
+        const a = analyze(id);
+        if (!a) return;
+        const c = classify(a);
+        const patchBonus = /补丁|patch/i.test(a.name) ? -0.5 : 0;
+        const u = userZh[id] || {};
+        const zh = u.zh || trans[a.name] || (zhAll[id] && zhAll[id].zh) || null;
+        const workshop = 'https://steamcommunity.com/sharedfiles/filedetails/?id=' + id;
+        mods.push(Object.assign(a, {
+            tier: c.tier + patchBonus,
+            cat: c.cat,
+            old: a.gameversion !== lib.GAME_VERSION,
+            enabled: enabledIds.has(id),
+            zh,
+            desc: u.desc || (zhAll[id] && zhAll[id].desc) || autoPurpose(a),
+            workshop,
+        }));
+    });
+
+    // 已启用的按当前配置顺序，未启用的按推荐顺序
+    const active = pkgs
+        .map(p => mods.find(m => m.id === p.id))
+        .filter(Boolean)
+        .map(m => Object.assign(m, { cat: m.cat }));
+    const idle = mods.filter(m => !enabledIds.has(m.id));
+    idle.sort((a, b) => a.tier - b.tier || a.name.localeCompare(b.name, 'zh'));
+
+    return { active, idle, trans: loadTrans() };
+}
+
+// ---------- 保存 ----------
+function save(list) {
+    // list: [{id, enabled}]，顺序即加载顺序
+    const xml = fs.readFileSync(configPath(), 'utf8');
+    const pkgs = readPackages();
+    const tagOf = {};
+    pkgs.forEach(p => { tagOf[p.id] = { tag: p.tag, name: p.name }; });
+
+    // 备份
+    fs.writeFileSync(configPath() + '.bak', xml, 'utf8');
+
+    // 需要在配置里但原本没有的 mod：从 Installed 目录补一条
+    const INSTALLED = getPaths().INSTALLED;
+    const items = [];
+    list.forEach(it => {
+        if (!it.enabled) return;
+        let entry = tagOf[it.id];
+        if (!entry) {
+            const name = (() => {
+                const fl = path.join(INSTALLED, it.id, 'filelist.xml');
+                if (!fs.existsSync(fl)) return null;
+                const m = /<contentpackage\s+[^>]*?name="([^"]*)"/i.exec(fs.readFileSync(fl, 'utf8'));
+                return m ? m[1] : null;
+            })();
+            if (!name) return;
+            entry = {
+                name,
+                tag: `<package\n        path="${INSTALLED.replace(/\\/g, '/')}/${it.id}/filelist.xml" />`,
+            };
+        }
+        items.push(entry);
+    });
+
+    // 防误清空：原配置里有 mod，但新列表一个都不启用时拒绝写入
+    if (pkgs.length > 0 && items.length === 0) {
+        throw new Error('已阻止保存：当前配置有 ' + pkgs.length + ' 个 mod，但新列表为空（防误清空）。若确实要全部停用，请到游戏内操作。');
+    }
+
+    const inner = '\n' + items.map(e =>
+        `      <!--${e.name}-->\n      ${e.tag}`
+    ).join('\n') + '\n    ';
+
+    let out;
+    const reInner = /(<regularpackages>)[\s\S]*?(<\/regularpackages>)/;
+    const hasWrapper = /<contentpackages>[\s\S]*?<\/contentpackages>/.test(xml);
+    if (hasWrapper) {
+        if (reInner.test(xml)) {
+            out = xml.replace(reInner, '$1' + inner + '$2');
+        } else {
+            // 有 contentpackages 但缺 regularpackages：插到它内部
+            out = xml.replace('<contentpackages>',
+                '<contentpackages>\n    <regularpackages>' + inner + '    </regularpackages>');
+        }
+    } else {
+        // 没有 contentpackages（被游戏重置过）。注意：裸的 regularpackages 游戏不认，
+        // 必须先移除再以正确的包裹结构重建
+        out = xml.replace(/[\t ]*<regularpackages>[\s\S]*?<\/regularpackages>\r?\n?/, '');
+        const block = '  <contentpackages>\n    <regularpackages>' + inner + '</regularpackages>\n  </contentpackages>\n';
+        const i = out.lastIndexOf('</config>');
+        out = out.slice(0, i) + block + '</config>' + out.slice(i + '</config>'.length);
+    }
+    fs.writeFileSync(configPath(), out, 'utf8');
+    return items.length;
+}
+
+// ---------- HTTP ----------
+function send(res, code, body, type) {
+    res.writeHead(code, {
+        'Content-Type': type || 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+    });
+    res.end(body);
+}
+
+// 通过 Steam 启动游戏（本地服务，仅在本机生效）
+function launchGame() {
+    try {
+        exec('cmd /c start "" "steam://rungameid/602960"');
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+// ---------- mod 更新检测（离线：对比本机会话的版本快照）----------
+const VERSIONS = path.join(__dirname, 'versions.json');
+
+function loadVersions() {
+    try { return JSON.parse(fs.readFileSync(VERSIONS, 'utf8')); } catch (e) { return null; }
+}
+function saveVersions(v) {
+    fs.writeFileSync(VERSIONS, JSON.stringify(v, null, 2), 'utf8');
+}
+
+// 扫描当前所有工坊 mod 的版本，作为一次快照
+function scanModVersions() {
+    const W = getPaths().WORKSHOP;
+    const out = {};
+    if (!fs.existsSync(W)) return out;
+    fs.readdirSync(W).forEach(id => {
+        const dir = path.join(W, id);
+        if (!fs.statSync(dir).isDirectory()) return;
+        const fl = path.join(dir, 'filelist.xml');
+        if (!fs.existsSync(fl)) return;
+        let t;
+        try { t = fs.readFileSync(fl, 'utf8'); } catch (e) { return; }
+        out[id] = {
+            name: (/<contentpackage\s+[^>]*?name="([^"]*)"/i.exec(t) || [, '?'])[1],
+            modversion: (/modversion="([^"]*)"/i.exec(t) || [, '-'])[1],
+            gameversion: (/gameversion="([^"]*)"/i.exec(t) || [, '-'])[1],
+            ts: fs.statSync(fl).mtime.toISOString(),
+        };
+    });
+    return out;
+}
+
+// 自动简介：没有手写/内置简介时，从 mod 实际内容生成一行用途说明
+const KIND_ZH = {
+    Character: '角色/怪物', Item: '物品装备', Submarine: '潜艇船只', Text: '文本',
+    Talents: '天赋', TalentTrees: '天赋树', Jobs: '职业', Afflictions: '症状状态',
+    Missions: '任务', RandomEvents: '随机事件', NPCSets: 'NPC', Factions: '派系',
+    Structure: '建筑结构', Sounds: '音效', Particles: '粒子特效', UIStyle: '界面样式',
+    Decals: '贴图', Wreck: '沉船', EnemySubmarine: '敌方潜艇', Corpses: '尸体',
+};
+function autoPurpose(a) {
+    const t = a.tags || {};
+    const total = Object.values(t).reduce((x, y) => x + y, 0);
+    const n = a.name || '';
+    if (/luacsforbarotrauma/i.test(n)) return '前置框架：让游戏支持 Lua+C# 脚本类 mod，必须最先加载';
+    if (/luacsclientside/i.test(n)) return '前置框架：强制客户端加载 Lua 脚本（联机用）';
+    if (/^csforbarotrauma/i.test(n)) return '旧版脚本框架（已被 LuaCs 取代，不应启用）';
+    if (/汉化|简体|Chinese|CN_zh/i.test(n)) return '汉化覆盖：把文本替换为中文，应放最后加载';
+    if (a.deps && a.deps.length) {
+        const base = a.deps.join('、');
+        if (/补丁|兼容/i.test(n)) return '兼容补丁：配合「' + base + '」使用，解决内容冲突';
+        if (/补丁|patch|expansion|拓展|扩展/i.test(n)) return '扩展补丁：基于「' + base + '」追加内容';
+    }
+    if (/补丁|patch/i.test(n)) return '补丁/修正类：调整或修复现有内容';
+    if (total === 0 && (a.hasLua || a.hasCs)) {
+        const lang = [a.hasLua ? 'Lua' : '', a.hasCs ? 'C#' : ''].filter(Boolean).join('+');
+        return '脚本机制类：不新增内容，用 ' + lang + ' 改游戏机制/性能';
+    }
+    const raw = {
+        '潜艇船只': (t.Submarine || 0) + (t.EnemySubmarine || 0),
+        '角色内容': t.Character || 0,
+        '职业/天赋': (t.Jobs || 0) + (t.Talents || 0) + (t.TalentTrees || 0),
+        '物品装备': t.Item || 0,
+        '症状机制': t.Afflictions || 0,
+        'NPC/派系': (t.NPCSets || 0) + (t.Factions || 0) + (t.NPCConversations || 0),
+        '事件/任务': (t.RandomEvents || 0) + (t.Missions || 0) + (t.LocationTypes || 0),
+        '文本覆盖': t.Text || 0,
+        '音效/特效': (t.Sounds || 0) + (t.Particles || 0) + (t.Decals || 0),
+    };
+    const score = { '潜艇船只': raw['潜艇船只'] * 12, '角色内容': raw['角色内容'] * 4 };
+    const best = Object.entries(raw)
+        .map(([k, v]) => [k, (score[k] !== undefined ? score[k] : v)])
+        .filter(([, v]) => v > 0)
+        .sort((a, b) => b[1] - a[1])[0];
+    if (!best) return '其他内容：' + Object.entries(t).slice(0, 3).map(([k, v]) => (KIND_ZH[k] || k) + '×' + v).join('、');
+    const unit = {
+        '潜艇船只': '艘潜艇', '角色内容': '个角色/怪物', '职业/天赋': '项职业或天赋',
+        '物品装备': '件物品', '症状机制': '项状态效果', 'NPC/派系': '项 NPC/派系',
+        '事件/任务': '项事件或任务', '文本覆盖': '处文本', '音效/特效': '项音效/特效',
+    };
+    let s = best[0] + '：新增/改动 ' + raw[best[0]] + ' ' + unit[best[0]];
+    const others = Object.entries(raw).filter(([k, v]) => k !== best[0] && v > 0)
+        .sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => k + '×' + v);
+    if (others.length) s += '（另含 ' + others.join('、') + '）';
+    if (a.hasLua || a.hasCs) s += '；含' + [a.hasLua ? 'Lua' : '', a.hasCs ? 'C#' : ''].filter(Boolean).join('+') + '脚本';
+    return s;
+}
+
+// 可能冲突：多个启用的 mod 定义了同一个标识符（重复定义，最容易导致报错）
+const DEF_TAGS = 'Item|Character|Affliction|Talent|Job|Submarine|NPCSet|Structure|Decal|Particle|Corpse|Wreck|StartItems';
+
+// 原版内容自带的标识符（mod 覆盖原版东西属于正常，不算冲突）
+let VANILLA = null;
+function vanillaIdentifiers() {
+    if (VANILLA) return VANILLA;
+    const set = new Set();
+    let scanned = 0;
+    (function walk(dir) {
+        if (scanned > 1500) return;
+        let ents = [];
+        try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const e of ents) {
+            if (scanned > 1500) return;
+            const p = path.join(dir, e.name);
+            if (e.isDirectory()) { walk(p); continue; }
+            if (!e.name.endsWith('.xml')) continue;
+            scanned++;
+            try {
+                if (fs.statSync(p).size > 2 * 1024 * 1024) continue;
+                const s = fs.readFileSync(p, 'utf8');
+                const re = new RegExp('<(?:' + DEF_TAGS + ')\\b[^>]*?identifier="([^"]+)"', 'g');
+                let r;
+                while ((r = re.exec(s)) !== null) set.add(r[1]);
+            } catch (err) { /* 跳过读不了的文件 */ }
+        }
+    })(path.join(getPaths().GAME, 'Content'));
+    VANILLA = set;
+    return set;
+}
+
+function findDuplicateIdentifiers(mods) {
+    const W = getPaths().WORKSHOP;
+    const vanilla = vanillaIdentifiers();
+    const map = {};
+    mods.forEach(m => {
+        const dir = path.join(W, m.id);
+        const fl = path.join(dir, 'filelist.xml');
+        if (!fs.existsSync(fl)) return;
+        let xml;
+        try { xml = fs.readFileSync(fl, 'utf8'); } catch (e) { return; }
+        let scanned = 0;
+        for (const f of xml.matchAll(/<\w+\s+file="([^"]+)"/g)) {
+            if (scanned++ > 60) break;                       // 每个 mod 最多扫 60 个文件，避免卡顿
+            const rel = f[1].replace('%ModDir%', '').replace(/^[/\\]/, '');
+            const p = path.join(dir, rel);
+            try {
+                if (!fs.existsSync(p)) continue;
+                if (fs.statSync(p).size > 2 * 1024 * 1024) continue;
+                const s = fs.readFileSync(p, 'utf8');
+                const re = new RegExp('<(?:' + DEF_TAGS + ')\\b[^>]*?identifier="([^"]+)"', 'g');
+                let r;
+                while ((r = re.exec(s)) !== null) {
+                    (map[r[1]] = map[r[1]] || new Set()).add(m.zh || m.name);
+                }
+            } catch (e) { /* 跳过读不了的文件 */ }
+        }
+    });
+    return Object.entries(map)
+        .filter(([ident, set]) => {
+            if (set.size < 2) return false;
+            if (vanilla.has(ident)) return false;          // 原版内容：正常覆盖
+            const names = [...set];
+            // 同系列/配套（名称前缀一致，如“东方…”）共享标识符属正常，不算冲突
+            const pre = names[0].slice(0, 2);
+            if (pre.length === 2 && names.every(n => n.slice(0, 2) === pre)) return false;
+            return true;
+        })
+        .map(([ident, set]) => ({ ident, mods: [...set] }))
+        .sort((a, b) => b.mods.length - a.mods.length)
+        .slice(0, 10);
+}
+
+// 用 App 模式打开独立窗口（无地址栏/无标签页，像真正的软件）
+function openAppWindow(u) {
+    const browsers = [
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    ];
+    for (const b of browsers) {
+        if (fs.existsSync(b)) {
+            try { exec(`"${b}" --app="${u}"`); return true; } catch (e) { /* 继续尝试下一个 */ }
+        }
+    }
+    try { exec(`cmd /c start "" "${u}"`); return true; } catch (e) { return false; }
+}
+
+const server = http.createServer((req, res) => {
+    const url = req.url.split('?')[0];
+
+    if (url === '/' || url === '/ui.html') {
+        if (!fs.existsSync(UI)) return send(res, 404, 'ui.html 缺失', 'text/plain');
+        return send(res, 200, fs.readFileSync(UI, 'utf8'), 'text/html; charset=utf-8');
+    }
+
+    if (url === '/api/data') {
+        try {
+            const data = buildData();
+            const P = getPaths();
+            data.paths = {
+                game: P.GAME,
+                workshop: P.WORKSHOP,
+                installed: P.INSTALLED,
+                gameExists: fs.existsSync(P.GAME),
+                workshopExists: fs.existsSync(P.WORKSHOP),
+                installedExists: fs.existsSync(P.INSTALLED),
+                manual: loadUserPaths(),
+            };
+            return send(res, 200, JSON.stringify(data));
+        } catch (e) {
+            return send(res, 500, JSON.stringify({ error: e.message }));
+        }
+    }
+
+    if (url === '/api/translate') {
+        translateAll()
+            .then(r => send(res, 200, JSON.stringify({ ok: true, trans: r.trans, added: r.added, skipped: r.skipped })))
+            .catch(e => send(res, 500, JSON.stringify({ ok: false, error: e.message })));
+        return;
+    }
+
+    if (url === '/api/save' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const list = JSON.parse(raw).list;
+                const n = save(list);
+                send(res, 200, JSON.stringify({ ok: true, saved: n }));
+            } catch (e) {
+                send(res, 500, JSON.stringify({ ok: false, error: e.message }));
+            }
+        });
+        return;
+    }
+
+    if (url === '/api/resort' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const list = JSON.parse(raw).list; // [{id, enabled}]，当前显示顺序
+                const data = buildData();
+                const byId = {};
+                data.active.concat(data.idle).forEach(m => { byId[m.id] = m; });
+
+                const enabledIds = list.filter(x => x.enabled).map(x => x.id);
+                const enabledMods = enabledIds.map(id => byId[id]).filter(Boolean);
+                const sortedEnabled = lib.resortActive(enabledMods);
+
+                const disabledIds = list.filter(x => !x.enabled).map(x => x.id);
+                const out = sortedEnabled.map(m => ({ id: m.id, enabled: true }))
+                    .concat(disabledIds.map(id => ({ id, enabled: false })));
+                send(res, 200, JSON.stringify({ ok: true, list: out }));
+            } catch (e) {
+                send(res, 500, JSON.stringify({ ok: false, error: e.message }));
+            }
+        });
+        return;
+    }
+
+    if (url === '/api/test' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const bodyJson = JSON.parse(raw);
+                const list = bodyJson.list;
+                // 先把当前顺序写入游戏配置，让启动的游戏用这套顺序
+                save(list);
+
+                const data = buildData();
+                const byId = {};
+                data.active.concat(data.idle).forEach(m => { byId[m.id] = m; });
+                const enabledIds = list.filter(x => x.enabled).map(x => x.id);
+                const enabledMods = enabledIds.map(id => byId[id]).filter(Boolean);
+
+                // 框架冲突：旧框架 CsForBarotrauma 与 LuaCs 系列同时启用
+                const hasOldFrame = enabledMods.some(m => /^csforbarotrauma/i.test(m.name) && !/luacs/i.test(m.name));
+                const hasLuaFrame = enabledMods.some(m => /luacs/i.test(m.name));
+                const frameConflict = hasOldFrame && hasLuaFrame;
+
+                // 版本不匹配
+                const oldMods = enabledMods
+                    .filter(m => m.gameversion !== GAME_VERSION)
+                    .map(m => ({ name: m.zh || m.name, ver: m.gameversion }));
+
+                // 同系列冲突检测
+                const items = enabledMods.map(m => ({
+                    name: m.name, zhName: m.zh || m.name, modversion: m.modversion,
+                }));
+                const groups = detectSeries(items);
+                const conflicts = groups.filter(g => !g.addon);
+                const addons = groups.filter(g => g.addon);
+
+                // 依赖缺失：启用的 mod 声明了依赖，但那个依赖没启用
+                const enabledNames = new Set(enabledMods.map(m => m.name));
+                const missingDeps = [];
+                enabledMods.forEach(m => {
+                    (m.deps || []).forEach(dep => {
+                        if (!enabledNames.has(dep)) {
+                            missingDeps.push({ mod: m.zh || m.name, dep });
+                        }
+                    });
+                });
+
+                // 可能冲突：同一标识符被多个启用 mod 定义
+                const possibleConflicts = findDuplicateIdentifiers(enabledMods);
+
+                const doLaunch = bodyJson.launch !== false;
+                const launched = doLaunch ? launchGame() : false;
+
+                send(res, 200, JSON.stringify({
+                    ok: true, launched,
+                    report: {
+                        enabledCount: enabledMods.length,
+                        frameConflict, oldMods, conflicts, addons, missingDeps, possibleConflicts,
+                    },
+                }));
+            } catch (e) {
+                send(res, 500, JSON.stringify({ ok: false, error: e.message }));
+            }
+        });
+        return;
+    }
+
+    if (url === '/api/setzh' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw);
+                const store = loadUserZh();
+                const cur = store[b.id] || {};
+                if (typeof b.zh === 'string') cur.zh = b.zh;
+                if (typeof b.desc === 'string') cur.desc = b.desc;
+                store[b.id] = cur;
+                fs.writeFileSync(USER_ZH, JSON.stringify(store, null, 2), 'utf8');
+                send(res, 200, JSON.stringify({ ok: true }));
+            } catch (e) {
+                send(res, 500, JSON.stringify({ ok: false, error: e.message }));
+            }
+        });
+        return;
+    }
+
+    // 检查 mod 更新：与上次快照对比（新增 / 版本变化 / 移除）
+    if (url === '/api/updates' && req.method === 'POST') {
+        try {
+            const current = scanModVersions();
+            const prev = loadVersions();
+            if (!prev) {
+                saveVersions(current);
+                return send(res, 200, JSON.stringify({ ok: true, first: true, count: Object.keys(current).length }));
+            }
+            const updated = [], added = [], removed = [];
+            Object.keys(current).forEach(id => {
+                const c = current[id], p = prev[id];
+                if (!p) {
+                    added.push({ id, name: c.name, modversion: c.modversion, ts: c.ts });
+                } else if (c.modversion !== p.modversion || c.gameversion !== p.gameversion) {
+                    updated.push({
+                        id, name: c.name,
+                        from: p.modversion, to: c.modversion,
+                        gameFrom: p.gameversion, gameTo: c.gameversion,
+                        ts: c.ts,
+                    });
+                }
+            });
+            Object.keys(prev).forEach(id => { if (!current[id]) removed.push({ id, name: prev[id].name }); });
+            saveVersions(current);     // 本次结果作为下次基线
+            send(res, 200, JSON.stringify({ ok: true, updated, added, removed, count: Object.keys(current).length }));
+        } catch (e) {
+            send(res, 500, JSON.stringify({ ok: false, error: e.message }));
+        }
+        return;
+    }
+
+    // 重新检测路径（刚装好游戏 / 改了 Steam 库位置时用）
+    if (url === '/api/paths/rescan' && req.method === 'POST') {
+        try {
+            const P = refreshPaths();
+            send(res, 200, JSON.stringify({ ok: true, paths: P, manual: loadUserPaths() }));
+        } catch (e) {
+            send(res, 500, JSON.stringify({ ok: false, error: e.message }));
+        }
+        return;
+    }
+
+    // 手动指定路径（写入 paths.json，优先级最高；传空字符串即恢复自动）
+    if (url === '/api/paths' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw) || {};
+                if (b.clear) {
+                    saveUserPaths({ game: '', workshop: '', installed: '' });
+                } else {
+                    saveUserPaths({
+                        game: typeof b.game === 'string' ? b.game.trim() : undefined,
+                        workshop: typeof b.workshop === 'string' ? b.workshop.trim() : undefined,
+                        installed: typeof b.installed === 'string' ? b.installed.trim() : undefined,
+                    });
+                }
+                const P = refreshPaths();
+                send(res, 200, JSON.stringify({ ok: true, paths: P, manual: loadUserPaths() }));
+            } catch (e) {
+                send(res, 500, JSON.stringify({ ok: false, error: e.message }));
+            }
+        });
+        return;
+    }
+
+    // 界面「退出」按钮调用：干净关闭服务（配合隐藏启动脚本，像正常软件一样退出）
+    if (url === '/api/quit') {
+        send(res, 200, JSON.stringify({ ok: true }));
+        setTimeout(() => process.exit(0), 150);
+        return;
+    }
+
+    if (url === '/icon.png' || url === '/favicon.ico') {
+        const f = path.join(__dirname, 'app.png');
+        if (fs.existsSync(f)) return send(res, 200, fs.readFileSync(f), 'image/png');
+        return send(res, 404, 'not found', 'text/plain');
+    }
+
+    send(res, 404, 'not found', 'text/plain');
+});
+
+// 端口自动顺延（避开系统保留段）
+let port = PORT;
+server.on('error', e => {
+    if (e.code === 'EADDRINUSE') {
+        port += 1;
+        if (port > PORT_START + 60) { console.log('找不到可用端口'); process.exit(1); }
+        server.listen(port, '127.0.0.1');
+    } else {
+        console.log(e.message);
+    }
+});
+server.listen(port, '127.0.0.1', () => {
+    fs.writeFileSync(path.join(__dirname, 'server.port'), String(port), 'utf8');
+    // 首次运行记录一份版本基线，供「检查更新」对比
+    if (!loadVersions()) {
+        try { saveVersions(scanModVersions()); console.log('  已记录 mod 版本基线'); } catch (e) { /* 忽略 */ }
+    }
+
+    // 监听就绪后打开独立 App 窗口（本地工具，双击即用）
+    try {
+        openAppWindow('http://127.0.0.1:' + port + '/');
+    } catch (e) { /* 忽略：窗口打开失败不影响服务 */ }
+    console.log('=========================================');
+    console.log('  潜渊症 Mod 可视化管理');
+    console.log('  http://127.0.0.1:' + port);
+    const PP = getPaths();
+    console.log('  游戏目录：' + PP.GAME);
+    console.log('  创意工坊：' + PP.WORKSHOP);
+    console.log('  关闭此窗口即停止服务');
+    console.log('=========================================');
+});

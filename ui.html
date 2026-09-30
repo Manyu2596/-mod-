@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/png" href="/icon.png">
+<title>潜渊症 Mod 管理</title>
+<style>
+body{background:#0f1219;color:#e6e9ef;font-family:"Microsoft YaHei",sans-serif;margin:0;padding:20px 22px}
+h1{font-size:18px;margin:0 0 4px}
+.sub{color:#8b94a8;font-size:12.5px;margin-bottom:14px}
+.bar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+button{background:#1c2434;color:#e6e9ef;border:1px solid #2a3346;border-radius:9px;
+  padding:8px 15px;font-size:13px;cursor:pointer;font-family:inherit}
+button:hover{border-color:#6366f1}
+button.primary{background:linear-gradient(135deg,#6366f1,#8b5cf6);border:none;font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+.quit{background:#3b1d24;color:#f87171;margin-left:auto}
+.cols{display:flex;gap:20px;align-items:flex-start}
+.col{flex:1;min-width:0;background:#131926;border:1px solid #222b3d;border-radius:12px;padding:12px}
+.col h2{font-size:14px;margin:0 0 4px}
+.col h2 span{color:#8b94a8;font-size:12px;font-weight:normal;margin-left:6px}
+.hint{color:#6b7590;font-size:11.5px;margin-bottom:8px}
+ul{list-style:none;margin:0;padding:0;min-height:60px}
+li{display:flex;align-items:center;gap:9px;padding:7px 8px;margin-bottom:5px;
+  background:#182032;border:1px solid #232c40;border-radius:8px;cursor:default}
+li:hover{background:#1d263a}
+li.drag{opacity:.45}
+li.over{border-color:#6366f1}
+.grip{color:#5a6479;cursor:grab;font-size:15px;user-select:none}
+.idx{color:#8b94a8;font-size:11.5px;width:20px;text-align:right;flex-shrink:0}
+.info{flex:1;min-width:0}
+.nm{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{color:#6b7590;font-size:11px;margin-top:1px}
+.dsc{color:#8b94a8;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tog{flex-shrink:0;padding:4px 10px;font-size:11.5px}
+.tr2{background:#1c2c3a;color:#7dd3fc}
+.tagd{background:#4a1a1e;color:#f87171;font-size:10.5px;padding:1px 6px;border-radius:8px}
+.msg{padding:9px 13px;border-radius:8px;font-size:12.5px;margin-bottom:12px;display:none}
+.msg.ok{background:#12261c;border-left:3px solid #4ade80;display:block}
+.msg.err{background:#2a1618;border-left:3px solid #f87171;display:block}
+.report{display:none;margin-bottom:14px;padding:12px 14px;border-radius:10px;font-size:12.5px;line-height:1.6;
+  background:#131926;border:1px solid #222b3d}
+.report.ok{border-left:3px solid #4ade80}
+.report.warn{border-left:3px solid #f5c451}
+.report.danger{border-left:3px solid #f87171}
+.report h3{margin:0 0 6px;font-size:13.5px}
+.report ul{margin:4px 0 4px 18px}
+.report li{margin:2px 0}
+.report .sev{font-weight:600}
+.report .sev.c{color:#f87171}
+.report .sev.w{color:#f5c451}
+.report .sev.i{color:#7dd3fc}
+.rcols{display:flex;gap:22px;align-items:flex-start;margin-top:6px}
+.rcol{flex:1;min-width:0}
+.rright{border-left:1px solid #222b3d;padding-left:18px}
+@media(max-width:900px){.rcols{flex-direction:column}.rright{border-left:none;padding-left:0;border-top:1px solid #222b3d;padding-top:10px}}
+.lnk{color:#a5b4fc;font-size:12.5px;text-decoration:none;padding:7px 11px;
+  border:1px solid #2a3346;border-radius:9px}
+.lnk:hover{border-color:#6366f1}
+.go{color:#7dd3fc;text-decoration:none;font-size:13px;padding:3px 7px;flex-shrink:0}
+.go:hover{color:#a5b4fc}
+.cn{color:#4ade80}
+.paths{display:none;margin-bottom:14px;padding:12px 14px;border-radius:10px;
+  background:#131926;border:1px solid #222b3d;font-size:12.5px}
+.paths.show{display:block}
+.ptitle{font-size:13.5px;font-weight:600;margin-bottom:8px}
+.ptitle span{color:#8b94a8;font-size:11.5px;font-weight:normal;margin-left:8px}
+.prow{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.plabel{width:76px;color:#8b94a8;flex-shrink:0}
+.prow input{flex:1;min-width:0;background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;
+  border-radius:7px;padding:6px 9px;font-size:12px;font-family:inherit}
+.prow input:focus{outline:none;border-color:#6366f1}
+.pok{flex-shrink:0;font-size:11.5px;width:52px}
+.pbtns{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px}
+.mtag{color:#f5c451;font-size:11.5px;font-weight:normal;margin-left:6px}
+@media(max-width:1000px){.cols{flex-direction:column}}
+</style>
+</head>
+<body>
+<h1>潜渊症 Mod 管理</h1>
+<div class="sub">拖拽调整顺序 · 点击按钮启用/停用 · 保存后直接写入游戏配置</div>
+
+<div class="bar">
+  <button class="primary" id="save">保存到游戏</button>
+  <button id="resort">重新排序</button>
+  <button id="test">启动游戏</button>
+  <button id="reload">扫描路径</button>
+  <button id="updates">检查更新</button>
+  <button id="paths">路径设置</button>
+  <button id="tr">翻译名称（本地 AI）</button>
+  <a class="lnk" href="https://steamcommunity.com/app/602960/workshop/" target="_blank">创意工坊 ↗</a>
+  <a class="lnk" href="https://steamcommunity.com/my/myworkshopfiles/?appid=602960" target="_blank">我的订阅 ↗</a>
+  <span class="hint" id="stat"></span>
+  <button id="quit" class="quit" title="关闭程序并退出后台服务">退出</button>
+</div>
+
+<div class="msg" id="msg"></div>
+<div class="report" id="report"></div>
+
+<div class="paths" id="pathBox">
+  <div class="ptitle">路径设置<span>找不到 mod / 游戏不在默认位置时，可以手动指定</span><span class="mtag" id="manualTag"></span></div>
+  <div class="prow"><span class="plabel">游戏目录</span><input id="pGame" spellcheck="false" placeholder="例：D:\Steam\steamapps\common\Barotrauma"><span class="pok" id="okGame"></span></div>
+  <div class="prow"><span class="plabel">创意工坊</span><input id="pShop" spellcheck="false" placeholder="例：D:\Steam\steamapps\workshop\content\602960"><span class="pok" id="okShop"></span></div>
+  <div class="prow"><span class="plabel">已安装mod</span><input id="pInst" spellcheck="false" placeholder="留空 = 自动（%LOCALAPPDATA% 下）"><span class="pok" id="okInst"></span></div>
+  <div class="pbtns">
+    <button id="pRescan">重新检测</button>
+    <button id="pSave" class="primary">保存并使用</button>
+    <button id="pClear">恢复自动</button>
+    <span class="hint">手动路径优先级最高，会存到 paths.json；留空的项仍走自动检测</span>
+  </div>
+</div>
+
+<div class="cols">
+  <div class="col">
+    <h2>① 已启用<span id="ca"></span></h2>
+    <div class="hint">列表从上到下加载，越靠下优先级越高</div>
+    <ul id="activeList"></ul>
+  </div>
+  <div class="col">
+    <h2>② 未启用<span id="ci"></span></h2>
+    <div class="hint">不参与加载，启用后会按规则插入左栏</div>
+    <ul id="idleList"></ul>
+  </div>
+</div>
+
+<script>
+let active = [], idle = [];
+let dragFrom = null, dragId = null;
+let curPaths = null;
+
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+async function load(){
+    const r = await fetch('/api/data');
+    const d = await r.json();
+    active = d.active || []; idle = d.idle || [];
+    curPaths = d.paths || null;
+    render();
+    fillPaths();
+}
+
+function markPath(id, ok){
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = ok ? '有效' : '无效';
+    el.style.color = ok ? '#4ade80' : '#f87171';
+}
+
+function fillPaths(){
+    if (!curPaths) return;
+    document.getElementById('pGame').value = curPaths.game || '';
+    document.getElementById('pShop').value = curPaths.workshop || '';
+    document.getElementById('pInst').value = curPaths.installed || '';
+    markPath('okGame', curPaths.gameExists);
+    markPath('okShop', curPaths.workshopExists);
+    markPath('okInst', curPaths.installedExists);
+    const m = curPaths.manual || {};
+    const n = ['game', 'workshop', 'installed'].filter(k => m[k]).length;
+    const tag = document.getElementById('manualTag');
+    if (tag) tag.textContent = n ? ('· ' + n + ' 项为手动设置（优先级最高）') : '';
+    if (!curPaths.workshopExists || !curPaths.gameExists) {
+        show('路径无效，读不到 mod / 游戏配置。点「路径设置」→ 重新检测或手动填写。', false);
+        document.getElementById('pathBox').classList.add('show');
+    }
+}
+
+function makeItem(m, i, isActive){
+    const li = document.createElement('li');
+    li.draggable = true;
+    li.dataset.id = m.id;
+    const danger = /csforbarotrauma/i.test(m.name) && !/luacs/i.test(m.name);
+    const zhHtml = m.zh ? '<span class="cn">' + esc(m.zh) + '</span> ' : '';
+    li.innerHTML =
+        '<span class="grip">≡</span>' +
+        '<span class="idx">' + (i + 1) + '</span>' +
+        '<div class="info"><div class="nm">' + zhHtml + esc(m.name) +
+        (danger ? ' <span class="tagd">旧框架·建议停用</span>' : '') +
+        '</div><div class="meta">' + esc(m.cat) + ' · v' + m.modversion + '</div>' +
+        (m.desc ? '<div class="dsc" title="' + esc(m.desc) + '">' + esc(m.desc) + '</div>' : '') +
+        '</div>' +
+        '<a class="go" href="' + (m.workshop || '#') + '" target="_blank" rel="noopener">创意工坊 ↗</a>' +
+        '<button class="tog tr2" title="手动补充/修改中文名与简介">译</button>' +
+        '<button class="tog tgs">' + (isActive ? '停用' : '启用') + '</button>';
+
+    li.querySelector('.tgs').onclick = () => {
+        if (isActive) {
+            const k = active.findIndex(x => x.id === m.id);
+            idle.push(active.splice(k, 1)[0]);
+        } else {
+            const k = idle.findIndex(x => x.id === m.id);
+            active.push(idle.splice(k, 1)[0]);
+        }
+        render();
+    };
+
+    li.querySelector('.tr2').onclick = async () => {
+        const zh = prompt('中文名（留空=不变）：', m.zh || m.name);
+        if (zh === null) return;
+        const desc = prompt('中文简介（留空=不变）：', m.desc || '');
+        if (desc === null) return;
+        try {
+            await fetch('/api/setzh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: m.id, zh, desc })
+            });
+            await load();
+            show('已保存《' + (zh || m.zh || m.name) + '》的中文信息', true);
+        } catch (e) {
+            show('保存失败：' + e.message, false);
+        }
+    };
+
+    li.ondragstart = () => { dragFrom = isActive ? 'a' : 'i'; dragId = m.id; li.classList.add('drag'); };
+    li.ondragend = () => { li.classList.remove('drag'); clearOver(); };
+    li.ondragover = e => { e.preventDefault(); clearOver(); li.classList.add('over'); };
+    li.ondrop = e => {
+        e.preventDefault();
+        if (dragFrom !== (isActive ? 'a' : 'i')) return;
+        const arr = isActive ? active : idle;
+        const from = arr.findIndex(x => x.id === dragId);
+        const to = arr.findIndex(x => x.id === m.id);
+        if (from < 0 || to < 0 || from === to) return;
+        arr.splice(to, 0, arr.splice(from, 1)[0]);
+        render();
+    };
+    return li;
+}
+
+function clearOver(){
+    document.querySelectorAll('li.over').forEach(x => x.classList.remove('over'));
+}
+
+function render(){
+    const a = document.getElementById('activeList');
+    const b = document.getElementById('idleList');
+    a.innerHTML = ''; b.innerHTML = '';
+    active.forEach((m, i) => a.appendChild(makeItem(m, i, true)));
+    idle.forEach((m, i) => b.appendChild(makeItem(m, i, false)));
+    document.getElementById('ca').textContent = active.length + ' 个';
+    document.getElementById('ci').textContent = idle.length + ' 个';
+    document.getElementById('stat').textContent =
+        '共 ' + (active.length + idle.length) + ' 个 mod';
+}
+
+function show(text, ok){
+    const el = document.getElementById('msg');
+    el.textContent = text;
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+document.getElementById('save').onclick = async () => {
+    const btn = document.getElementById('save');
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+    try {
+        const list = active.map(m => ({ id: m.id, enabled: true }))
+            .concat(idle.map(m => ({ id: m.id, enabled: false })));
+        const r = await fetch('/api/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ list })
+        });
+        const d = await r.json();
+        if (d.ok) {
+            show('已写入游戏配置，启用了 ' + d.saved + ' 个 mod。原文件已备份为 config_player.xml.bak', true);
+        } else {
+            show('保存失败：' + d.error, false);
+        }
+    } catch (e) {
+        show('保存失败：' + e.message, false);
+    }
+    btn.disabled = false;
+    btn.textContent = '保存到游戏';
+};
+
+// 「扫描路径」：先重新检测本机路径，再重新读取 mod 列表
+document.getElementById('reload').onclick = async () => {
+    const btn = document.getElementById('reload');
+    btn.disabled = true; btn.textContent = '扫描中...';
+    try {
+        await fetch('/api/paths/rescan', { method: 'POST' });
+    } catch (e) { /* 失败也继续刷新列表 */ }
+    await load();
+    show('已重新扫描路径并刷新 mod 列表', true);
+    btn.disabled = false; btn.textContent = '扫描路径';
+};
+
+document.getElementById('resort').onclick = async () => {
+    const btn = document.getElementById('resort');
+    btn.disabled = true;
+    btn.textContent = '排序中...';
+    try {
+        const list = active.map(m => ({ id: m.id, enabled: true }))
+            .concat(idle.map(m => ({ id: m.id, enabled: false })));
+        const r = await fetch('/api/resort', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ list })
+        });
+        const d = await r.json();
+        if (d.ok) {
+            const byId = {};
+            active.concat(idle).forEach(m => { byId[m.id] = m; });
+            active = d.list.filter(x => x.enabled).map(x => byId[x.id]).filter(Boolean);
+            idle = d.list.filter(x => !x.enabled).map(x => byId[x.id]).filter(Boolean);
+            render();
+            show('已按规则重新排序，点「保存到游戏」生效', true);
+        } else {
+            show('排序失败：' + d.error, false);
+        }
+    } catch (e) {
+        show('排序失败：' + e.message, false);
+    }
+    btn.disabled = false;
+    btn.textContent = '重新排序';
+};
+
+function renderReport(rp){
+    const box = document.getElementById('report');
+    const sec = (sev, title, items) => {
+        if (!items || !items.length) return '';
+        const cls = { c:'c', w:'w', i:'i' }[sev];
+        const lis = items.map(x => {
+            if (typeof x === 'string') return '<li>' + esc(x) + '</li>';
+            if (x.dep) return '<li>' + esc(x.mod) + ' 需要「' + esc(x.dep) + '」</li>';
+            return '<li>' + esc(x.name) + (x.ver ? ' <span class="meta">适用 ' + esc(x.ver) + '</span>' : '') + '</li>';
+        }).join('');
+        return '<div class="sev ' + cls + '">' + title + '：</div><ul>' + lis + '</ul>';
+    };
+
+    const md = rp.missingDeps || [];
+    let level = 'ok', head = '✅ 未检测到明显冲突';
+    if (rp.frameConflict || (rp.conflicts && rp.conflicts.length) || md.length) level = 'danger';
+    else if ((rp.oldMods && rp.oldMods.length)) level = 'warn';
+    if (level === 'danger') head = '⚠ 检测到可能冲突，仍可启动游戏（建议先处理）';
+    else if (level === 'warn') head = '⚠ 有版本不匹配，可能影响加载，但可启动游戏';
+
+    // 左栏：需要处理的问题
+    let left = '';
+    if (rp.frameConflict) {
+        left += '<div class="sev c">旧框架与新框架冲突：</div><ul><li>同时启用了「CsForBarotrauma（旧）」和 LuaCs 系列框架，两者会互相覆盖导致 Lua 类 mod 报错。建议停用旧的 CsForBarotrauma。</li></ul>';
+    }
+    left += sec('c', '同系列疑似冲突（建议只留一个）', (rp.conflicts || []).map(g => g.label + '：' + g.names.join('、')));
+    left += sec('w', '版本不匹配（适用版本非 1.13.4.0）', rp.oldMods);
+    if (!left) left = '<div class="sev i">未发现需要处理的问题。</div>';
+
+    // 右栏：新增的「依赖缺失」检查 + 配套参考
+    let right = '';
+    right += sec('c', '依赖缺失（需要的 mod 没启用）', md);
+    if (!md.length) {
+        right += '<div class="sev i">依赖缺失：</div><ul><li>未发现，所有启用 mod 的依赖都已启用。</li></ul>';
+    }
+    right += sec('i', '配套组合（需同时启用，已排好，无需担心）', (rp.addons || []).map(g => g.label));
+    right += '<div class="sev i">本次检查项：</div><ul>' +
+        '<li>框架冲突 / 依赖缺失</li>' +
+        '<li>同系列重复启用</li>' +
+        '<li>适用版本是否匹配</li>' +
+        '<li>本体与补丁是否配套</li>' +
+        '<li>可能冲突（重复定义）</li>' +
+        '</ul>';
+
+    // 本次检查项下面：可能冲突（多个 mod 定义了同一标识符）
+    const pc = rp.possibleConflicts || [];
+    if (pc.length) {
+        right += '<div class="sev c">可能冲突（多个 mod 定义了同一标识符）：</div><ul>' +
+            pc.map(x => '<li>' + esc(x.ident) + ' — ' + x.mods.map(n => esc(n)).join('、') + '</li>').join('') +
+            '</ul>';
+    } else {
+        right += '<div class="sev i">可能冲突：</div><ul><li>未发现多个 mod 定义同一标识符。</li></ul>';
+    }
+
+    box.className = 'report ' + level;
+    box.innerHTML = '<h3>' + head + '</h3>已启用 ' + rp.enabledCount + ' 个 mod。<br>' +
+        '<div class="rcols">' +
+        '<div class="rcol">' + left + '</div>' +
+        '<div class="rcol rright">' + right + '</div>' +
+        '</div>' +
+        '<div style="margin-top:8px;color:#8b94a8">游戏已通过 Steam 启动，进游戏后看是否报错 / 重复定义。</div>';
+    box.style.display = 'block';
+}
+
+document.getElementById('test').onclick = async () => {
+    const btn = document.getElementById('test');
+    btn.disabled = true;
+    btn.textContent = '启动中...';
+    try {
+        const list = active.map(m => ({ id: m.id, enabled: true }))
+            .concat(idle.map(m => ({ id: m.id, enabled: false })));
+        const r = await fetch('/api/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ list, launch: true })
+        });
+        const d = await r.json();
+        if (d.ok) {
+            renderReport(d.report);
+            show(d.launched ? '已保存配置并启动游戏，进游戏看看效果吧～' : '已保存，但未能自动启动游戏（请手动从 Steam 打开）', d.launched);
+        } else {
+            show('测试失败：' + d.error, false);
+        }
+    } catch (e) {
+        show('测试失败：' + e.message, false);
+    }
+    btn.disabled = false;
+    btn.textContent = '启动游戏';
+};
+
+document.getElementById('tr').onclick = async () => {
+    const btn = document.getElementById('tr');
+    btn.disabled = true;
+    btn.textContent = '翻译中...（需本地 AI）';
+    try {
+        const r = await fetch('/api/translate');
+        const d = await r.json();
+        if (d.ok) {
+            show(d.added === 0
+                ? '没有需要翻译的：' + (d.skipped || 0) + ' 个 mod 都已有中文名，已跳过'
+                : '已翻译 ' + d.added + ' 个新名称（' + (d.skipped || 0) + ' 个已有中文名，已跳过）', true);
+        }
+        else show('翻译失败：' + d.error + '（不影响已内置的中文名）', false);
+    } catch (e) {
+        show('翻译失败：' + e.message, false);
+    }
+    btn.disabled = false;
+    btn.textContent = '翻译名称（本地 AI）';
+    load();
+};
+
+document.getElementById('updates').onclick = async () => {
+    const btn = document.getElementById('updates');
+    btn.disabled = true; btn.textContent = '检查中...';
+    try {
+        const r = await fetch('/api/updates', { method: 'POST' });
+        const d = await r.json();
+        if (!d.ok) {
+            show('检查失败：' + d.error, false);
+        } else if (d.first) {
+            show('已记录 ' + d.count + ' 个 mod 的当前版本，之后再点检查就能提示谁更新了', true);
+        } else {
+            const n = (d.updated || []).length + (d.added || []).length + (d.removed || []).length;
+            if (!n) {
+                show('没有发现变动：' + d.count + ' 个 mod 的版本与上次一致', true);
+                document.getElementById('report').style.display = 'none';
+            } else {
+                let html = '<h3>发现 ' + n + ' 项变动</h3>';
+                if ((d.updated || []).length) {
+                    html += '<div class="sev w">已更新（作者发了新版）：</div><ul>' +
+                        d.updated.map(u => '<li>' + esc(u.name) + '　' + esc(u.from) + ' → ' + esc(u.to) +
+                            (u.gameFrom !== u.gameTo ? '　（适用 ' + esc(u.gameFrom) + ' → ' + esc(u.gameTo) + '）' : '') +
+                            '</li>').join('') + '</ul>';
+                }
+                if ((d.added || []).length) {
+                    html += '<div class="sev i">新订阅 / 新增：</div><ul>' +
+                        d.added.map(u => '<li>' + esc(u.name) + '　v' + esc(u.modversion) + '</li>').join('') + '</ul>';
+                }
+                if ((d.removed || []).length) {
+                    html += '<div class="sev c">已移除：</div><ul>' +
+                        d.removed.map(u => '<li>' + esc(u.name || u.id) + '</li>').join('') + '</ul>';
+                }
+                html += '<div style="margin-top:6px;color:#8b94a8">说明：只能检测你已订阅并下载过的 mod；'
+                    + 'Steam 会自动更新已订阅 mod，更新后这里就会提示。'
+                    + '工坊上你还没订阅的新 mod 无法检测（Steam 接口被墙）。</div>';
+                const box = document.getElementById('report');
+                box.className = 'report warn';
+                box.innerHTML = html;
+                box.style.display = 'block';
+                show('发现 ' + n + ' 项变动，详见下方列表', true);
+            }
+        }
+    } catch (e) {
+        show('检查失败：' + e.message, false);
+    }
+    btn.disabled = false; btn.textContent = '检查更新';
+};
+
+document.getElementById('paths').onclick = () => {
+    document.getElementById('pathBox').classList.toggle('show');
+};
+
+document.getElementById('pRescan').onclick = async () => {
+    const btn = document.getElementById('pRescan');
+    btn.disabled = true; btn.textContent = '检测中...';
+    try {
+        const r = await fetch('/api/paths/rescan', { method: 'POST' });
+        const d = await r.json();
+        if (d.ok) {
+            await load();
+            const m = (curPaths && curPaths.manual) || {};
+            const hasManual = m.game || m.workshop || m.installed;
+            show(hasManual
+                ? '已重新检测，但仍优先使用你的手动路径；想改用自动结果请点「恢复自动」'
+                : '已重新检测路径', true);
+        }
+        else show('检测失败：' + d.error, false);
+    } catch (e) { show('检测失败：' + e.message, false); }
+    btn.disabled = false; btn.textContent = '重新检测';
+};
+
+document.getElementById('pSave').onclick = async () => {
+    const btn = document.getElementById('pSave');
+    btn.disabled = true; btn.textContent = '保存中...';
+    try {
+        const r = await fetch('/api/paths', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                game: document.getElementById('pGame').value,
+                workshop: document.getElementById('pShop').value,
+                installed: document.getElementById('pInst').value
+            })
+        });
+        const d = await r.json();
+        if (d.ok) { await load(); show('路径已保存并立即生效', true); }
+        else show('保存失败：' + d.error, false);
+    } catch (e) { show('保存失败：' + e.message, false); }
+    btn.disabled = false; btn.textContent = '保存并使用';
+};
+
+document.getElementById('pClear').onclick = async () => {
+    try {
+        const r = await fetch('/api/paths', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clear: true })
+        });
+        const d = await r.json();
+        if (d.ok) { await load(); show('已清除手动路径，恢复自动检测', true); }
+        else show('清除失败：' + d.error, false);
+    } catch (e) { show('清除失败：' + e.message, false); }
+};
+
+document.getElementById('quit').onclick = async () => {
+    try { await fetch('/api/quit'); } catch (e) { /* 服务可能已关闭 */ }
+    window.close();
+};
+
+load();
+</script>
+</body>
+</html>
