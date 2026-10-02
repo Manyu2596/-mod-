@@ -498,6 +498,8 @@ function openAppWindow(u) {
 const SHARE_FILE = path.join(__dirname, 'share.json');
 function loadShare() { try { return JSON.parse(fs.readFileSync(SHARE_FILE, 'utf8')); } catch (e) { return {}; } }
 function saveShare(o) { fs.writeFileSync(SHARE_FILE, JSON.stringify(o, null, 2), 'utf8'); }
+function __escShare(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function __isWs(id) { return /^[0-9]{5,}$/.test(String(id == null ? '' : id).trim()); }
 // 默认就放在软件自己的文件夹里
 function defaultShareFolder() {
     const nw = path.join(__dirname, 'exported_mods');
@@ -507,6 +509,14 @@ function defaultShareFolder() {
 }
 // 没填就用记住的，再没有就用软件目录内的默认文件夹
 function resolveShareFolder(f) { return (f && String(f).trim()) || loadShare().folder || defaultShareFolder(); }
+
+// ---------- mod 方案存档：一套启用列表存一个文件，换存档时来回切换 ----------
+const PRESET_DIR = path.join(__dirname, 'presets');
+function __presetFile(name) {
+    const n = String(name == null ? '' : name).replace(/[\\/:*?"<>|]/g, '_').replace(/^\s+|\s+$/g, '').replace(/^\.+$/, '_');
+    if (!n) return '';
+    return path.join(PRESET_DIR, n + '.json');
+}
 
 // mod id 只允许纯数字（Steam 创意工坊 id）：挡住 manifest 里 ../.. 之类的路径穿越
 function safeModId(id) { return /^\d{1,20}$/.test(String(id == null ? '' : id)) ? String(id) : ''; }
@@ -767,7 +777,8 @@ const server = http.createServer((req, res) => {
 
 ﻿    // ---------- 共享文件夹（导出/导入 mod 目录）----------
     if (url === '/api/share/get') {
-        send(res, 200, JSON.stringify({ ok: true, folder: loadShare().folder || defaultShareFolder() }));
+        const sh = loadShare();
+        send(res, 200, JSON.stringify({ ok: true, folder: sh.folder || defaultShareFolder(), minimize: sh.minimize !== false }));
         return;
     }
 
@@ -777,7 +788,8 @@ const server = http.createServer((req, res) => {
         req.on('end', () => {
             try {
                 const b = JSON.parse(raw);
-                saveShare({ folder: (b.folder || '').trim() });
+                const prev = loadShare();
+                saveShare({ folder: (b.folder || '').trim(), minimize: b.minimize === undefined ? (prev.minimize !== false) : !!b.minimize });
                 send(res, 200, JSON.stringify({ ok: true }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
@@ -810,6 +822,15 @@ const server = http.createServer((req, res) => {
                     active: (b.list || []).map(m => ({ id: m.id, name: m.name || '', zh: m.zh || '' })),
                 };
                 fs.writeFileSync(path.join(folder, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+                // 顺带生成订阅清单：对方不想拷大文件时，直接在这里订阅创意工坊 mod
+                try {
+                    const wsList = (b.list || []).filter(m => __isWs(m && m.id));
+                    if (wsList.length) {
+                        const items = wsList.map(m => '<li><a class="sub" href="steam://subscribe/' + m.id + '">Steam 订阅</a> <b>' + __escShare(m.zh || m.name || m.id) + '</b> <code>' + m.id + '</code> <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id + '">网页打开</a></li>').join('');
+                        const html = '<!doctype html><html><head><meta charset="utf-8"><title>一键订阅 mod</title><style>body{font-family:"Microsoft YaHei",sans-serif;background:#111827;color:#e5e7eb;padding:24px;line-height:1.7}a{color:#818cf8}a.sub{background:#6366f1;color:#fff;padding:3px 10px;border-radius:6px;text-decoration:none;margin-right:8px}li{margin:6px 0}code{color:#9ca3af}</style></head><body><h2>共 ' + wsList.length + ' 个创意工坊 mod</h2><ol>' + items + '</ol><p>点「Steam 订阅」会拉起 Steam 客户端并弹出订阅确认；也可以点「网页打开」在社区页手动点「+ 订阅」。</p></body></html>';
+                        fs.writeFileSync(path.join(folder, 'subscribe.html'), html, 'utf8');
+                    }
+                } catch (e) { /* 忽略：订阅清单生成失败不影响导出 */ }
                 send(res, 200, JSON.stringify({ ok: true, count, skipped }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
@@ -824,7 +845,20 @@ const server = http.createServer((req, res) => {
                 const b = JSON.parse(raw);
                 const folder = resolveShareFolder(b.folder);
                 fs.mkdirSync(folder, { recursive: true });
-                const Q=String.fromCharCode(34);const cmd = process.platform === 'win32' ? 'cmd /c explorer '+Q+folder+Q : 'xdg-open '+Q+folder+Q;
+                // Windows：调用独立脚本打开文件夹并强制置前（后台进程直接开 explorer 会被挡在后面）
+                const Q = String.fromCharCode(34);
+                const minimizeAll = (typeof b.minimize === 'boolean') ? b.minimize : (loadShare().minimize !== false);
+                let cmd;
+                if (process.platform === 'win32') {
+                    const ps1 = path.join(__dirname, 'openFolder.ps1');
+                    if (fs.existsSync(ps1)) {
+                        cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' + Q + ps1 + Q + ' -Folder ' + Q + folder + Q + (minimizeAll ? ' -Minimize 1' : '');
+                    } else {
+                        cmd = 'cmd /c explorer ' + Q + folder + Q;
+                    }
+                } else {
+                    cmd = 'xdg-open ' + Q + folder + Q;
+                }
                 exec(cmd, () => {});
                 send(res, 200, JSON.stringify({ ok: true, folder }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
@@ -841,9 +875,13 @@ const server = http.createServer((req, res) => {
                 if (!fs.existsSync(folder)) throw new Error('还没有可导入的内容：' + folder);
                 const mfPath = path.join(folder, 'manifest.json');
                 if (!fs.existsSync(mfPath)) throw new Error('该文件夹里没有 manifest.json，不是有效的 mod 包');
-                const mf = JSON.parse(fs.readFileSync(mfPath, 'utf8'));
-                const ids = (mf.active || []).map(x => safeModId(typeof x === 'string' ? x : (x && x.id))).filter(Boolean);
-                if (!ids.length) throw new Error('manifest 里没有任何已启用的 mod');
+                const mf = JSON.parse(fs.readFileSync(mfPath, 'utf8').replace(/^\uFEFF/, ''));
+                const items = (mf.active || []).map(x => ({
+                    id: safeModId(typeof x === 'string' ? x : (x && x.id)),
+                    name: (x && (x.zh || x.name)) || '',
+                })).filter(o => o.id);
+                if (!items.length) throw new Error('manifest 里没有任何已启用的 mod');
+                const ids = items.map(o => o.id);
                 const W = getPaths().WORKSHOP;
                 if (!W) throw new Error('未检测到创意工坊目录，无法导入');
                 fs.mkdirSync(W, { recursive: true });
@@ -854,11 +892,117 @@ const server = http.createServer((req, res) => {
                     const dest = path.join(W, id);
                     rmDirSync(dest); copyDir(src, dest); imported++;
                 }
-                send(res, 200, JSON.stringify({ ok: true, imported, skipped, active: ids }));
+                send(res, 200, JSON.stringify({ ok: true, imported, skipped, active: ids, items }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
         return;
     }
+    // 用 Steam 客户端或网页订阅创意工坊 mod（导入时缺的、或别人给的清单里的）
+    if (url === '/api/steam/subscribe' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const ids = [];
+                for (const x of (b.ids || [])) {
+                    const id = String(x == null ? '' : x).trim();
+                    if (__isWs(id) && !ids.includes(id)) ids.push(id);
+                }
+                const useWeb = b.mode === 'web';
+                if (!ids.length) throw new Error('没有可订阅的创意工坊 mod（本地 mod 无法订阅）');
+                if (ids.length > 30) throw new Error('一次最多订阅 30 个，当前 ' + ids.length + ' 个');
+                ids.forEach((id, i) => {
+                    const u = useWeb ? ('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id) : ('steam://subscribe/' + id);
+                    setTimeout(() => { try { exec('cmd /c start "" "' + u + '"'); } catch (e) { /* 忽略 */ } }, i * 400);
+                });
+                send(res, 200, JSON.stringify({ ok: true, count: ids.length, mode: useWeb ? 'web' : 'steam' }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    // ---------- mod 方案存档 ----------
+    if (url === '/api/presets/list') {
+        try {
+            fs.mkdirSync(PRESET_DIR, { recursive: true });
+            const arr = fs.readdirSync(PRESET_DIR).filter(f => f.toLowerCase().endsWith('.json')).map(f => {
+                const st = fs.statSync(path.join(PRESET_DIR, f));
+                let count = 0;
+                try { count = (JSON.parse(fs.readFileSync(path.join(PRESET_DIR, f), 'utf8').replace(/^\uFEFF/, '')).active || []).length; } catch (e) { }
+                return { name: f.slice(0, -5), count: count, savedAt: st.mtimeMs };
+            }).sort((a, b) => b.savedAt - a.savedAt);
+            send(res, 200, JSON.stringify({ ok: true, dir: PRESET_DIR, presets: arr }));
+        } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        return;
+    }
+
+    if (url === '/api/presets/save' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const file = __presetFile(b.name);
+                if (!file) throw new Error('请先给方案起个名字');
+                if (!(b.list || []).length) throw new Error('当前没有已启用的 mod，没什么可存');
+                fs.mkdirSync(PRESET_DIR, { recursive: true });
+                const data = {
+                    app: 'BarotraumaModSorter', type: 'preset',
+                    savedAt: new Date().toISOString(),
+                    active: (b.list || []).map(m => ({ id: safeModId(m && m.id), name: (m && (m.zh || m.name)) || '' })).filter(o => o.id),
+                };
+                if (!data.active.length) throw new Error('没有有效的 mod id');
+                fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+                send(res, 200, JSON.stringify({ ok: true, name: path.basename(file, '.json'), count: data.active.length }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    if (url === '/api/presets/load' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const file = __presetFile(b.name);
+                if (!file || !fs.existsSync(file)) throw new Error('找不到这个方案');
+                const d = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+                const items = (d.active || []).map(x => ({
+                    id: safeModId(typeof x === 'string' ? x : (x && x.id)),
+                    name: (x && (x.zh || x.name)) || '',
+                })).filter(o => o.id);
+                send(res, 200, JSON.stringify({ ok: true, items: items }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    if (url === '/api/presets/delete' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const file = __presetFile(b.name);
+                if (!file || !fs.existsSync(file)) throw new Error('找不到这个方案');
+                fs.unlinkSync(file);
+                send(res, 200, JSON.stringify({ ok: true }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    if (url === '/api/presets/open' && req.method === 'POST') {
+        try {
+            fs.mkdirSync(PRESET_DIR, { recursive: true });
+            exec('cmd /c explorer "' + PRESET_DIR + '"');
+            send(res, 200, JSON.stringify({ ok: true, dir: PRESET_DIR }));
+        } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        return;
+    }
+
     // 界面「退出」按钮调用：干净关闭服务（配合隐藏启动脚本，像正常软件一样退出）
     if (url === '/api/quit') {
         send(res, 200, JSON.stringify({ ok: true }));

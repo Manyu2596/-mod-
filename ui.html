@@ -107,6 +107,7 @@ li.over{border-color:#6366f1}
   <button id="exportMods">导出mod文件</button>
   <button id="openFolder">打开文件夹</button>
   <button id="importMods">导入mod文件</button>
+  <button id="btnPresets">mod方案存档</button>
   <button id="tr">翻译名称（本地 AI）</button>
   <span class="sbox" id="sBox">
     <input id="search" placeholder="搜索 mod：名称 / 中文名 / 分类 / ID" spellcheck="false" autocomplete="off">
@@ -119,6 +120,8 @@ li.over{border-color:#6366f1}
 </div>
 
 <div class="msg" id="msg"></div>
+<div class="report" id="subBox" style="display:none"></div>
+<div class="report" id="presetBox" style="display:none"></div>
 <div class="report" id="report"></div>
 
 <div class="paths" id="pathBox">
@@ -132,6 +135,7 @@ li.over{border-color:#6366f1}
     <button id="pSave" class="primary">保存并使用</button>
     <button id="pClear">恢复自动</button>
     <button id="pShareSave">保存导出文件夹</button>
+    <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="pShareMin" checked> 打开文件夹前先最小化所有窗口（游戏全屏时勾这个，文件夹才会弹到最前）</label>
     <span class="hint">导出文件夹默认就在软件自己的文件夹里（exported_mods，用英文避免发给别人时乱码），留空即可；想放别处可自行填写并点「保存导出文件夹」</span>
   </div>
 </div>
@@ -569,24 +573,130 @@ async function openFolderNow(){
     const folder = await shareFolder();
     if (!folder) return false;
     try {
-        const r = await fetch('/api/share/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) });
+        const r = await fetch('/api/share/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder, minimize: (document.getElementById('pShareMin') || {}).checked }) });
         const d = await r.json();
         if (d && d.ok) return true;
         show('打开文件夹失败：' + ((d && d.error) || '未知错误'), false);
     } catch (e) { show('打开文件夹失败：' + e.message, false); }
     return false;
 }
+function renderSubscribe(list){
+    const box = document.getElementById('subBox');
+    if (!box) return;
+    if (!list || !list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    const rows = list.map(m => '<li><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id + '" target="_blank">' + (m.name && m.name !== m.id ? m.name : ('创意工坊 ' + m.id)) + '</a></li>').join('');
+    box.innerHTML = '<b>其中 ' + list.length + ' 个本机还没有（多半是 Steam 创意工坊物品）：</b><ul>' + rows + '</ul>' +
+        '<div class="pbtns"><button id="subSteam" class="primary">用 Steam 订阅这 ' + list.length + ' 个</button>' +
+        '<button id="subWeb">在网页里订阅</button><button id="subClose">关闭</button>' +
+        '<span class="hint">订阅后 Steam 会自动下载，再点上面的「扫描路径」就能看到并启用了</span></div>';
+    box.style.display = 'block';
+    document.getElementById('subClose').onclick = () => { box.style.display = 'none'; };
+    const go = async (mode) => {
+        try {
+            const r = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: list.map(m => m.id), mode: mode }) });
+            const d = await r.json();
+            show(d.ok ? ('已拉起 Steam，请在弹出的窗口里确认订阅（共 ' + d.count + ' 个）') : ('订阅失败：' + d.error), d.ok);
+        } catch (e) { show('订阅失败：' + e.message, false); }
+    };
+    document.getElementById('subSteam').onclick = () => go('steam');
+    document.getElementById('subWeb').onclick = () => go('web');
+}
+
+// ---------- mod 方案存档：一套启用列表 = 一个文件，换存档时来回切 ----------
+async function presetRefresh(){
+    const box = document.getElementById('presetBox');
+    let d = {};
+    try { const r = await fetch('/api/presets/list'); d = await r.json(); } catch (e) { box.innerHTML = '读取方案失败：' + e.message; return; }
+    if (!d.ok) { box.innerHTML = '读取方案失败：' + d.error; box.style.display = 'block'; return; }
+    const rows = (d.presets || []).map(p => {
+        const t = new Date(p.savedAt).toLocaleString('zh-CN', { hour12: false });
+        return '<li><b>' + esc(p.name) + '</b> <span class="hint">' + p.count + ' 个 mod · ' + t + '</span> ' +
+            '<button data-apply="' + esc(p.name) + '">应用</button> <button data-del="' + esc(p.name) + '">删除</button></li>';
+    }).join('');
+    box.innerHTML = '<h3>mod 方案存档</h3>' +
+        '<div>把当前「已启用」的这套存成一个文件；换一批 mod 再存一个。之后点「应用」就能整切换回去（会写入游戏配置）。</div>' +
+        '<div class="pbtns"><input id="presetName" spellcheck="false" placeholder="方案名，如：单人战役 / 联机车队" style="flex:0 1 240px;background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;border-radius:9px;padding:7px 10px;font-size:12.5px">' +
+        '<button id="presetSave" class="primary">保存当前启用</button>' +
+        '<button id="presetOpen">打开方案文件夹</button>' +
+        '<button id="presetClose">关闭</button>' +
+        '<span class="hint">方案存在软件目录的 presets 文件夹里</span></div>' +
+        (rows ? ('<ul>' + rows + '</ul>') : '<div class="hint" style="margin-top:8px">还没有保存过方案</div>');
+    box.style.display = 'block';
+    document.getElementById('presetClose').onclick = () => { box.style.display = 'none'; };
+    document.getElementById('presetOpen').onclick = async () => {
+        try { await fetch('/api/presets/open', { method: 'POST' }); } catch (e) { }
+    };
+    document.getElementById('presetSave').onclick = async () => {
+        const inp = document.getElementById('presetName');
+        const name = (inp.value || '').trim();
+        if (!name) { show('请先填方案名', false); return; }
+        try {
+            const r = await fetch('/api/presets/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name, list: active.map(m => ({ id: m.id, name: m.name, zh: m.zh })) }) });
+            const d2 = await r.json();
+            if (!d2.ok) { show('保存方案失败：' + d2.error, false); return; }
+            show('已保存方案「' + d2.name + '」，共 ' + d2.count + ' 个 mod', true);
+            inp.value = ''; await presetRefresh();
+        } catch (e) { show('保存方案失败：' + e.message, false); }
+    };
+    box.querySelectorAll('[data-apply]').forEach(btn => {
+        btn.onclick = async () => {
+            const nm = btn.getAttribute('data-apply');
+            try {
+                const r = await fetch('/api/presets/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nm }) });
+                const d2 = await r.json();
+                if (!d2.ok) { show('应用失败：' + d2.error, false); return; }
+                const ids = (d2.items || []).map(o => o.id);
+                const byId = {}; active.concat(idle).forEach(m => { byId[m.id] = m; });
+                const nameById = {}; (d2.items || []).forEach(o => { nameById[o.id] = o.name; });
+                const newActive = []; const missList = [];
+                for (const id of ids) {
+                    const m = byId[id];
+                    if (m) newActive.push(m);
+                    else missList.push({ id: id, name: nameById[id] || id });
+                }
+                const used = new Set(newActive.map(m => m.id));
+                idle = active.concat(idle).filter(m => !used.has(m.id));
+                active = newActive; render();
+                const s = await saveNow();
+                let msg = '已切换到方案「' + nm + '」：启用 ' + active.length + ' 个 mod';
+                if (missList.length) msg += '；' + missList.length + ' 个本机没有';
+                show(msg + '。已写入游戏配置', !!(s && s.ok));
+                renderSubscribe(missList);
+            } catch (e) { show('应用失败：' + e.message, false); }
+        };
+    });
+    box.querySelectorAll('[data-del]').forEach(btn => {
+        btn.onclick = async () => {
+            const nm = btn.getAttribute('data-del');
+            if (!confirm('确定删除方案「' + nm + '」？')) return;
+            try {
+                const r = await fetch('/api/presets/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nm }) });
+                const d2 = await r.json();
+                show(d2.ok ? ('已删除方案「' + nm + '」') : ('删除失败：' + d2.error), !!d2.ok);
+                await presetRefresh();
+            } catch (e) { show('删除失败：' + e.message, false); }
+        };
+    });
+}
+document.getElementById('btnPresets').onclick = async () => {
+    const box = document.getElementById('presetBox');
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+    await presetRefresh();
+};
+
 async function refreshShare(){
     try {
         const r = await fetch('/api/share/get');
         const d = await r.json();
         if (d && d.ok && d.folder) document.getElementById('pShare').value = d.folder;
+        const cbMin = document.getElementById('pShareMin');
+        if (cbMin) cbMin.checked = d.minimize !== false;
     } catch (e) { }
 }
 document.getElementById('pShareSave').onclick = async () => {
     const folder = (document.getElementById('pShare').value || '').trim();
     try {
-        await fetch('/api/share/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) });
+        await fetch('/api/share/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder, minimize: (document.getElementById('pShareMin') || {}).checked }) });
         show(folder ? ('已记住导出文件夹：' + folder) : '已清空（将用默认：软件文件夹里的 exported_mods）', true);
     } catch (e) { show('保存失败：' + e.message, false); }
 };
@@ -602,7 +712,7 @@ document.getElementById('exportMods').onclick = async () => {
         if (d.ok) {
             let msg = '已导出 ' + d.count + ' 个 mod 文件到：' + folder;
             if (d.skipped && d.skipped.length) msg += '；' + d.skipped.length + ' 个在本机找不到源目录，已跳过';
-            show(msg + '。已自动打开该文件夹，直接把这个文件夹发给别人，对方用「导入mod文件」即可', true);
+            show(msg + '。已自动打开文件夹：把它整个发给对方即可；里面的 subscribe.html 让对方双击就能一键订阅这些创意工坊 mod', true);
             await openFolderNow();
         } else show('导出失败：' + d.error, false);
     } catch (e) { show('导出失败：' + e.message, false); }
@@ -626,17 +736,24 @@ document.getElementById('importMods').onclick = async () => {
         if (!d.ok) { show('导入失败：' + d.error, false); return; }
         await load();
         const ids = d.active || [];
+        const items = d.items || ids.map(id => ({ id: id, name: '' }));
         const pool = active.concat(idle);
         const byId = {}; pool.forEach(m => { byId[m.id] = m; });
-        const newActive = []; let missing = 0;
-        for (const id of ids) { const m = byId[id]; if (m) newActive.push(m); else missing++; }
+        const nameById = {}; items.forEach(o => { nameById[o.id] = o.name; });
+        const newActive = []; let missing = 0; const missList = [];
+        for (const id of ids) {
+            const m = byId[id];
+            if (m) newActive.push(m);
+            else { missing++; if (/^[0-9]{5,}$/.test(String(id))) missList.push({ id: id, name: nameById[id] || id }); }
+        }
+        renderSubscribe(missList);
         const used = new Set(newActive.map(m => m.id));
         const newIdle = pool.filter(m => !used.has(m.id));
         active = newActive; idle = newIdle; render();
         const s = await saveNow();
         if (s && s.ok) {
             let msg = '已导入并写入游戏：启用 ' + active.length + ' 个 mod 文件';
-            if (missing) msg += '；' + missing + ' 个在包里但本机未成功复制，已跳过';
+            if (missing) msg += '；' + missing + ' 个本机缺失，可在下面点 Steam 订阅补齐';
             show(msg + '。原文件已备份为 config_player.xml.bak', true);
         } else {
             show('已复制 mod，但写入游戏失败：' + ((s && s.error) || '未知错误'), false);

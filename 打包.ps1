@@ -2,12 +2,25 @@
 $dist = Join-Path $root 'dist\潜渊症Mod管理器'
 
 # 重打包前保留运行时用户数据（手动译文 / 翻译缓存 / 版本基线），打包完成后还原
-$userData = @('user_zh.json', 'translations.json', 'versions.json')
+$userData = @('user_zh.json', 'translations.json', 'versions.json', 'share.json')
 $keep = @{}
 foreach ($f in $userData) {
     $p = Join-Path $dist $f
     if (Test-Path $p) { $keep[$f] = [System.IO.File]::ReadAllBytes($p) }
 }
+
+# 保留「mod 方案存档」（用户的 mod 组合），避免一次重打包就全没了
+$presetKeep = Join-Path $env:TEMP 'BaroPresetsBackup'
+if (Test-Path $presetKeep) { Remove-Item $presetKeep -Recurse -Force }
+if (Test-Path (Join-Path $dist 'presets')) {
+    Copy-Item (Join-Path $dist 'presets') $presetKeep -Recurse -Force
+}
+
+# 先停掉正在跑的实例，否则 node.exe 被占用删不掉
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like ('*' + (Join-Path $dist 'server.js') + '*') } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
 
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
@@ -26,13 +39,18 @@ if (!(Test-Path $nodeSrc)) {
 }
 Copy-Item $nodeSrc (Join-Path $dist 'node.exe') -Force
 
-foreach ($f in @('server.js', 'ui.html', 'sort.js', 'zh.json', 'fetch_meta.js', 'app.png', 'app.ico', '潜渊症Mod管理器.vbs')) {
+foreach ($f in @('server.js', 'ui.html', 'sort.js', 'zh.json', 'fetch_meta.js', 'app.png', 'app.ico', 'openFolder.ps1', '潜渊症Mod管理器.vbs')) {
     $p = Join-Path $root $f
     if (Test-Path $p) { Copy-Item $p (Join-Path $dist $f) -Force }
 }
 # 还原用户数据（分享给别人前可自行删除这几个文件）
 foreach ($f in $keep.Keys) {
     [System.IO.File]::WriteAllBytes((Join-Path $dist $f), $keep[$f])
+}
+# 还原方案存档
+if (Test-Path $presetKeep) {
+    Copy-Item $presetKeep (Join-Path $dist 'presets') -Recurse -Force
+    Remove-Item $presetKeep -Recurse -Force
 }
 
 function W($name, $text) {
@@ -91,6 +109,18 @@ $tReadme = @'
 点「导出mod文件」：把当前已启用的 mod（含加载顺序）复制到本目录下的
 exported_mods 文件夹，压缩后发给朋友即可；对方点「导入mod文件」选中
 该文件夹，就会自动复制回他的创意工坊并按原顺序启用。
+导出的文件夹里还有 subscribe.html，朋友双击就能逐个在 Steam 里订阅，
+不用拷大文件。
+
+【mod 方案存档（一个存档一套 mod）】
+点工具栏「mod方案存档」：
+  1) 填个名字（如 单人战役）→ 点「保存当前启用」
+  2) 换一批 mod → 再存一个（如 联机车队）
+  3) 以后点对应方案右边的「应用」，整份启用列表瞬间切回并写入游戏
+方案存在本目录的 presets 文件夹里，可以自己备份。
+
+【一键打开文件夹】
+点「打开文件夹」直接弹出导出目录（不用先去配置路径）。
 
 【换电脑能用吗】
 能。会自动从 Steam 注册表 + Steam 库配置探测游戏与创意工坊目录，
