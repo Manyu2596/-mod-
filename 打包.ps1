@@ -12,8 +12,10 @@ foreach ($f in $userData) {
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 
-# Node 运行时：优先用项目目录里的 node.exe，其次用系统 PATH 里的 node
+# Node 运行时：项目目录 node.exe → 环境变量 BARO_NODE → Program Files → 系统 PATH
 $nodeSrc = Join-Path $root 'node.exe'
+if (!(Test-Path $nodeSrc) -and $env:BARO_NODE) { $nodeSrc = $env:BARO_NODE }
+if (!(Test-Path $nodeSrc)) { $nodeSrc = Join-Path $env:ProgramFiles 'nodejs\node.exe' }
 if (!(Test-Path $nodeSrc)) {
     $cmd = Get-Command node -ErrorAction SilentlyContinue
     if ($cmd) { $nodeSrc = $cmd.Source }
