@@ -83,6 +83,8 @@ async function translateAll() {
         throw new Error('未检测到本地 AI（Ollama 未运行）。当前 mod 的中文名/简介已内置，无需翻译；新订阅的 mod 可用每行右侧「译」按钮手动补充。');
     }
     const trans = loadTrans();
+    const transIdx = {};
+    Object.keys(trans).forEach(k => { transIdx[__normName(k)] = trans[k]; });
     const zhAll = loadZh();
     const userZh = loadUserZh();
     const data = buildData();
@@ -98,7 +100,8 @@ async function translateAll() {
     // 三个来源都没有“真正写过”中文名时才需要翻译：手动译文 > 模型译文 > 内置表
     const todo = mods.filter(m => {
         if (userZh[m.id] && userZh[m.id].zh) return false;
-        if (isRealTranslation(m.name, trans[m.name])) return false;
+        const __tv = trans[m.name] || transIdx[__normName(m.name)];
+        if (isRealTranslation(m.name, __tv)) return false;
         if (zhAll[m.id] && zhAll[m.id].zh) return false;
         return true;
     }).map(m => m.name);
@@ -159,7 +162,11 @@ async function translateAll() {
             throw new Error('第 ' + (Math.floor(i / BATCH) + 1) + '/' +
                 Math.ceil(todo.length / BATCH) + ' 批翻译失败：模型输出不是合法 JSON（已自动重试一次）');
         }
-        Object.assign(trans, obj);
+        // 把模型返回的键归一到真实 mod 名（它偶尔会丢空格），保证之后按名字能命中
+        Object.keys(obj).forEach(k => {
+            const real = batch.find(n => __normName(n) === __normName(k));
+            trans[real || k] = obj[k];
+        });
         fs.writeFileSync(TRANS, JSON.stringify(trans, null, 2), 'utf8');
         added += Object.keys(obj).length;
     }
@@ -195,6 +202,8 @@ function buildData() {
     const inConfig = {};
     pkgs.forEach(p => { inConfig[p.id] = p.tag; });
     const trans = loadTrans();
+    const transIdx = {};
+    Object.keys(trans).forEach(k => { transIdx[__normName(k)] = trans[k]; });
     const zhAll = loadZh();
     const userZh = loadUserZh();
 
@@ -208,7 +217,7 @@ function buildData() {
         const c = classify(a);
         const patchBonus = /补丁|patch/i.test(a.name) ? -0.5 : 0;
         const u = userZh[id] || {};
-        const zh = u.zh || trans[a.name] || (zhAll[id] && zhAll[id].zh) || null;
+        const zh = u.zh || trans[a.name] || transIdx[__normName(a.name)] || (zhAll[id] && zhAll[id].zh) || null;
         const workshop = 'https://steamcommunity.com/sharedfiles/filedetails/?id=' + id;
         mods.push(Object.assign(a, {
             tier: c.tier + patchBonus,
@@ -500,6 +509,9 @@ function loadShare() { try { return JSON.parse(fs.readFileSync(SHARE_FILE, 'utf8
 function saveShare(o) { fs.writeFileSync(SHARE_FILE, JSON.stringify(o, null, 2), 'utf8'); }
 function __escShare(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function __isWs(id) { return /^[0-9]{5,}$/.test(String(id == null ? '' : id).trim()); }
+// 模型翻译返回的键偶尔会丢空格/标点（如 DontOpenDebugConsoleOnErrors），
+// 显示时按去掉空格标点后的键兜底匹配，避免译文看起来像没保存
+function __normName(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^0-9a-z\u4e00-\u9fa5]/g, ''); }
 // 默认就放在软件自己的文件夹里
 function defaultShareFolder() {
     const nw = path.join(__dirname, 'exported_mods');
