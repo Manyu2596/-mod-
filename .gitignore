@@ -12,6 +12,8 @@ crashlogs/
 
 # 生成物
 report.html
+share.json
+exported_mods/
 sorted.txt
 order.json
 conflicts.txt

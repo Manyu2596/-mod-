@@ -88,35 +88,82 @@ async function translateAll() {
     const data = buildData();
     const mods = data.active.concat(data.idle);
 
-    // 只有三个来源都没有“写过”的中文名时才需要翻译：手动译文 > 模型译文 > 内置表
+    // 模型偶尔会偷懒把英文原名原样返回，这种不算已翻译，下次仍要重翻
+    function isRealTranslation(name, val) {
+        if (!val) return false;
+        if (val === name) return hasChinese(name);   // 原名自带中文才算数
+        return true;
+    }
+
+    // 三个来源都没有“真正写过”中文名时才需要翻译：手动译文 > 模型译文 > 内置表
     const todo = mods.filter(m => {
-        const existing = (userZh[m.id] && userZh[m.id].zh) ||
-            trans[m.name] ||
-            (zhAll[m.id] && zhAll[m.id].zh);
-        return !existing;
+        if (userZh[m.id] && userZh[m.id].zh) return false;
+        if (isRealTranslation(m.name, trans[m.name])) return false;
+        if (zhAll[m.id] && zhAll[m.id].zh) return false;
+        return true;
     }).map(m => m.name);
 
     const skipped = mods.length - todo.length;
     if (!todo.length) return { trans, added: 0, skipped };
 
-    const prompt =
-        '你是游戏模组名称翻译助手。把下列《潜渊症》(Barotrauma) 的模组名称翻译成中文。\n' +
-        '规则：只翻译名称本身；品牌名、角色名用音译或保留原文；不要意译专有名词；不要添加解释。\n' +
-        '只输出一个 JSON 对象，键是原始名称，值是中文译名。不要输出其他任何内容。\n\n' +
-        '待翻译：\n' + todo.map(n => '- ' + n).join('\n');
+    const promptFor = names =>
+        '你是游戏模组名称翻译助手，把《潜渊症》(Barotrauma) 的模组名称翻译成中文。\n' +
+        '硬性要求：每一条都必须给出中文译名，绝对不允许原样照抄英文。\n' +
+        '翻译规则：\n' +
+        '- 普通英文单词一律译成中文，参考示例：\n' +
+        '    Lootbelt -> 战利品腰带\n' +
+        '    BetterFabricatorUI -> 更好的制造站界面\n' +
+        '    Detectable Alien Minerals -> 可探测的外星矿物\n' +
+        '    Bigger Deconstructor -> 更大的解构器\n' +
+        '    ItemIO BetterMergeStack -> 物品IO 更好的堆栈合并\n' +
+        '    [BOS]Wrecks -> [BOS]沉船残骸\n' +
+        '- 只有纯技术标识符/缩写才保留原文（如 Lua、IO、UI、API、[BOS]），它们之外的部分仍要译成中文。\n' +
+        '- 名称本身已经是中文的，原样返回即可。\n' +
+        '- 不要输出解释、序号或代码块标记。\n' +
+        '只输出一个 JSON 对象，键是原始名称，值是中文译名。\n\n' +
+        '待翻译：\n' + names.map(n => '- ' + n).join('\n');
 
-    const out = await ollamaChat(prompt);
-    let obj;
-    try {
+    // 宽松解析：小模型偶尔会漏掉最后一项的收尾引号、加尾逗号，或用 ```json 包裹。
+    // 直接解析失败时按由轻到重的顺序尝试修复，最后兜底用正则逐对提取。
+    function lenientParse(out) {
         const s = out.indexOf('{');
         const e = out.lastIndexOf('}');
-        obj = JSON.parse(out.slice(s, e + 1));
-    } catch (err) {
-        throw new Error('模型返回的不是合法 JSON');
+        if (s < 0 || e <= s) return null;
+        const txt = out.slice(s, e + 1).trim();
+        try { return JSON.parse(txt); } catch (_) {}
+        // 尾部缺引号：  ...文字}  →  ...文字"}
+        try { return JSON.parse(txt.replace(/\}\s*$/, '"}')); } catch (_) {}
+        // 尾逗号：  "...",}  →  "..."}
+        try { return JSON.parse(txt.replace(/,(\s*[}\]])/g, '$1')); } catch (_) {}
+        // 兜底：不依赖整体结构，逐对提取 "key":"value"
+        const obj = {};
+        const re = /"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+        let m;
+        while ((m = re.exec(txt)) !== null) obj[m[1]] = m[2];
+        return Object.keys(obj).length ? obj : null;
     }
-    Object.assign(trans, obj);
-    fs.writeFileSync(TRANS, JSON.stringify(trans, null, 2), 'utf8');
-    return { trans, added: Object.keys(obj).length, skipped };
+
+    // 分批翻译：每批条数少 → 输出短、出错概率低；且每批完成即落盘，
+    // 中途失败 / 停止服务都不会丢掉已翻好的部分。单批失败自动重试一次。
+    const BATCH = 10;
+    let added = 0;
+    for (let i = 0; i < todo.length; i += BATCH) {
+        const batch = todo.slice(i, i + BATCH);
+        let obj = null, lastErr = '';
+        for (let t = 0; t < 2 && !obj; t++) {
+            const out = await ollamaChat(promptFor(batch));
+            obj = lenientParse(out);
+            if (!obj) lastErr = out.slice(0, 120);
+        }
+        if (!obj) {
+            throw new Error('第 ' + (Math.floor(i / BATCH) + 1) + '/' +
+                Math.ceil(todo.length / BATCH) + ' 批翻译失败：模型输出不是合法 JSON（已自动重试一次）');
+        }
+        Object.assign(trans, obj);
+        fs.writeFileSync(TRANS, JSON.stringify(trans, null, 2), 'utf8');
+        added += Object.keys(obj).length;
+    }
+    return { trans, added, skipped };
 }
 
 // ---------- 读取当前配置中的 package ----------
@@ -447,6 +494,50 @@ function openAppWindow(u) {
     try { exec(`cmd /c start "" "${u}"`); return true; } catch (e) { return false; }
 }
 
+﻿// ---------- 共享文件夹（导出/导入 mod 目录）----------
+const SHARE_FILE = path.join(__dirname, 'share.json');
+function loadShare() { try { return JSON.parse(fs.readFileSync(SHARE_FILE, 'utf8')); } catch (e) { return {}; } }
+function saveShare(o) { fs.writeFileSync(SHARE_FILE, JSON.stringify(o, null, 2), 'utf8'); }
+// 默认就放在软件自己的文件夹里
+function defaultShareFolder() {
+    const nw = path.join(__dirname, 'exported_mods');
+    const old = path.join(__dirname, '导出的mod');
+    try { if (!fs.existsSync(nw) && fs.existsSync(old)) fs.renameSync(old, nw); } catch (e) { }
+    return nw;
+}
+// 没填就用记住的，再没有就用软件目录内的默认文件夹
+function resolveShareFolder(f) { return (f && String(f).trim()) || loadShare().folder || defaultShareFolder(); }
+
+// mod id 只允许纯数字（Steam 创意工坊 id）：挡住 manifest 里 ../.. 之类的路径穿越
+function safeModId(id) { return /^\d{1,20}$/.test(String(id == null ? '' : id)) ? String(id) : ''; }
+
+// 一个 mod 的源目录就是创意工坊下的 <id> 文件夹（管理器只扫描这里）
+function shareModDir(id) { return path.join(getPaths().WORKSHOP, id); }
+
+// 递归删除（兼容老版本 Node，不用 fs.rmSync）
+function rmDirSync(p) {
+    if (!fs.existsSync(p)) return;
+    for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+        const c = path.join(p, e.name);
+        if (e.isDirectory()) rmDirSync(c);
+        else if (e.isSymbolicLink()) { try { fs.unlinkSync(c); } catch (_) {} }
+        else { try { fs.unlinkSync(c); } catch (_) {} }
+    }
+    try { fs.rmdirSync(p); } catch (_) {}
+}
+
+// 递归复制（覆盖式）
+function copyDir(src, dest) {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+        const s = path.join(src, e.name);
+        const d = path.join(dest, e.name);
+        if (e.isDirectory()) copyDir(s, d);
+        else if (e.isSymbolicLink()) { try { fs.symlinkSync(fs.readlinkSync(s), d); } catch (_) {} }
+        else { fs.copyFileSync(s, d); }
+    }
+}
+
 const server = http.createServer((req, res) => {
     const url = req.url.split('?')[0];
 
@@ -674,6 +765,100 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+﻿    // ---------- 共享文件夹（导出/导入 mod 目录）----------
+    if (url === '/api/share/get') {
+        send(res, 200, JSON.stringify({ ok: true, folder: loadShare().folder || defaultShareFolder() }));
+        return;
+    }
+
+    if (url === '/api/share/set' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw);
+                saveShare({ folder: (b.folder || '').trim() });
+                send(res, 200, JSON.stringify({ ok: true }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    // 导出：把当前已启用的 mod 整个目录复制到共享文件夹，并写一份 manifest.json
+    if (url === '/api/share/export' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw);
+                const folder = resolveShareFolder(b.folder);
+                const ids = (b.list || []).map(x => safeModId(x && x.id)).filter(Boolean);
+                if (!ids.length) throw new Error('当前没有已启用的 mod 可导出');
+                fs.mkdirSync(folder, { recursive: true });
+                let count = 0; const skipped = [];
+                for (const id of ids) {
+                    const src = shareModDir(id);
+                    if (!fs.existsSync(src)) { skipped.push(id); continue; }
+                    const dest = path.join(folder, id);
+                    rmDirSync(dest);
+                    copyDir(src, dest);
+                    count++;
+                }
+                const manifest = {
+                    app: 'BarotraumaModSorter', type: 'modpack',
+                    exportedAt: new Date().toISOString(),
+                    active: (b.list || []).map(m => ({ id: m.id, name: m.name || '', zh: m.zh || '' })),
+                };
+                fs.writeFileSync(path.join(folder, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+                send(res, 200, JSON.stringify({ ok: true, count, skipped }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    if (url === '/api/share/open' && req.method === 'POST') {
+        let raw = "";
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw);
+                const folder = resolveShareFolder(b.folder);
+                fs.mkdirSync(folder, { recursive: true });
+                const Q=String.fromCharCode(34);const cmd = process.platform === 'win32' ? 'cmd /c explorer '+Q+folder+Q : 'xdg-open '+Q+folder+Q;
+                exec(cmd, () => {});
+                send(res, 200, JSON.stringify({ ok: true, folder }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+    if (url === '/api/share/import' && req.method === 'POST') {
+        let raw = "";
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw);
+                const folder = resolveShareFolder(b.folder);
+                if (!fs.existsSync(folder)) throw new Error('还没有可导入的内容：' + folder);
+                const mfPath = path.join(folder, 'manifest.json');
+                if (!fs.existsSync(mfPath)) throw new Error('该文件夹里没有 manifest.json，不是有效的 mod 包');
+                const mf = JSON.parse(fs.readFileSync(mfPath, 'utf8'));
+                const ids = (mf.active || []).map(x => safeModId(typeof x === 'string' ? x : (x && x.id))).filter(Boolean);
+                if (!ids.length) throw new Error('manifest 里没有任何已启用的 mod');
+                const W = getPaths().WORKSHOP;
+                if (!W) throw new Error('未检测到创意工坊目录，无法导入');
+                fs.mkdirSync(W, { recursive: true });
+                let imported = 0; const skipped = [];
+                for (const id of ids) {
+                    const src = path.join(folder, id);
+                    if (!fs.existsSync(src)) { skipped.push(id); continue; }
+                    const dest = path.join(W, id);
+                    rmDirSync(dest); copyDir(src, dest); imported++;
+                }
+                send(res, 200, JSON.stringify({ ok: true, imported, skipped, active: ids }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
     // 界面「退出」按钮调用：干净关闭服务（配合隐藏启动脚本，像正常软件一样退出）
     if (url === '/api/quit') {
         send(res, 200, JSON.stringify({ ok: true }));

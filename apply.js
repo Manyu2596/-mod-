@@ -15,6 +15,14 @@ const { analyze, classify, WORKSHOP, INSTALLED } = sort;
 const CONFIG = path.join(sort.GAME, 'config_player.xml');
 const DISABLE_TIER = 99; // sort.js 里给"旧框架/已废弃"打的档位
 
+// 按当前环境重新拼出某个创意工坊 mod 的 filelist.xml 路径。
+// 改过 Windows 用户名 / 换过 Steam 库之后，配置里残留的旧绝对路径会全部失效，
+// 游戏找不到文件就会表现为"mod 没启用"。所以这里一律重新生成，不沿用旧值。
+// 游戏配置里分隔符是正斜杠，因此统一转换。
+function rebuildPath(id) {
+    return path.join(INSTALLED, String(id), 'filelist.xml').replace(/\\/g, '/');
+}
+
 function main() {
     if (!fs.existsSync(CONFIG)) { console.error('找不到配置:', CONFIG); process.exit(1); }
 
@@ -35,9 +43,19 @@ function main() {
         const pkgPath = p[2];
         const idm = /Installed[/\\](\d+)[/\\]/i.exec(pkgPath);
         const id = idm ? idm[1] : null;
-        pkgs.push({ id, path: pkgPath, comment });
+        // 创意工坊 mod：按当前 INSTALLED 目录重建路径
+        // （改过用户名/换过电脑后，配置里残留的旧绝对路径会全部失效，
+        //   导致游戏找不到 mod 而"看起来没启用"）
+        const path = id ? rebuildPath(id) : pkgPath;
+        pkgs.push({ id, path, comment, stale: id && path !== pkgPath });
     }
     if (!pkgs.length) { console.error('没解析到任何 package'); process.exit(1); }
+
+    const staleCount = pkgs.filter(x => x.stale).length;
+    if (staleCount) {
+        console.log(`⚠ ${staleCount} 个 mod 的旧路径已失效，将按当前环境重建：`);
+        console.log(`  ${INSTALLED}`);
+    }
 
     // 给每个已启用 mod 计算分类
     const items = pkgs.map(pkg => {

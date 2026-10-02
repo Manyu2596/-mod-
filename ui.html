@@ -73,7 +73,24 @@ li.over{border-color:#6366f1}
 .pok{flex-shrink:0;font-size:11.5px;width:52px}
 .pbtns{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px}
 .mtag{color:#f5c451;font-size:11.5px;font-weight:normal;margin-left:6px}
+/* 搜索框 */
+.sbox{display:flex;align-items:center;background:#0f1626;border:1px solid #2a3346;
+  border-radius:9px;padding:0 3px 0 11px;width:250px;flex-shrink:0}
+.sbox:focus-within{border-color:#6366f1}
+.sbox input{flex:1;min-width:0;background:transparent;border:none;outline:none;
+  color:#e6e9ef;font-size:12.5px;font-family:inherit;padding:7px 0}
+.sbox input::placeholder{color:#5a6479}
+.sbox button{background:none;border:none;color:#8b94a8;font-size:17px;cursor:pointer;
+  padding:2px 8px;line-height:1;font-family:inherit}
+.sbox button:hover{color:#f87171}
+.sbox.has{border-color:#6366f1}
+.empty{display:block;color:#5a6479;font-size:12px;padding:10px 8px;
+  background:none;border:none;cursor:default}
+.empty:hover{background:none}
+.hit{background:#6366f1;color:#fff;border-radius:3px;padding:0 2px}
+
 @media(max-width:1000px){.cols{flex-direction:column}}
+@media(max-width:760px){.sbox{width:100%;order:-1}}
 </style>
 </head>
 <body>
@@ -87,11 +104,18 @@ li.over{border-color:#6366f1}
   <button id="reload">扫描路径</button>
   <button id="updates">检查更新</button>
   <button id="paths">路径设置</button>
+  <button id="exportMods">导出mod文件</button>
+  <button id="openFolder">打开文件夹</button>
+  <button id="importMods">导入mod文件</button>
   <button id="tr">翻译名称（本地 AI）</button>
+  <span class="sbox" id="sBox">
+    <input id="search" placeholder="搜索 mod：名称 / 中文名 / 分类 / ID" spellcheck="false" autocomplete="off">
+    <button id="sclear" title="清除搜索（Esc）">×</button>
+  </span>
   <a class="lnk" href="https://steamcommunity.com/app/602960/workshop/" target="_blank">创意工坊 ↗</a>
   <a class="lnk" href="https://steamcommunity.com/my/myworkshopfiles/?appid=602960" target="_blank">我的订阅 ↗</a>
   <span class="hint" id="stat"></span>
-  <button id="quit" class="quit" title="关闭程序并退出后台服务">退出</button>
+  <button id="quit" class="quit" title="先保存到游戏，再关闭程序并退出后台服务">保存退出</button>
 </div>
 
 <div class="msg" id="msg"></div>
@@ -102,11 +126,13 @@ li.over{border-color:#6366f1}
   <div class="prow"><span class="plabel">游戏目录</span><input id="pGame" spellcheck="false" placeholder="例：D:\Steam\steamapps\common\Barotrauma"><span class="pok" id="okGame"></span></div>
   <div class="prow"><span class="plabel">创意工坊</span><input id="pShop" spellcheck="false" placeholder="例：D:\Steam\steamapps\workshop\content\602960"><span class="pok" id="okShop"></span></div>
   <div class="prow"><span class="plabel">已安装mod</span><input id="pInst" spellcheck="false" placeholder="留空 = 自动（%LOCALAPPDATA% 下）"><span class="pok" id="okInst"></span></div>
+  <div class="prow"><span class="plabel">导出文件夹</span><input id="pShare" spellcheck="false" placeholder="留空 = 自动，放在软件文件夹里的 exported_mods"><span class="pok" id="okShare"></span></div>
   <div class="pbtns">
     <button id="pRescan">重新检测</button>
     <button id="pSave" class="primary">保存并使用</button>
     <button id="pClear">恢复自动</button>
-    <span class="hint">手动路径优先级最高，会存到 paths.json；留空的项仍走自动检测</span>
+    <button id="pShareSave">保存导出文件夹</button>
+    <span class="hint">导出文件夹默认就在软件自己的文件夹里（exported_mods，用英文避免发给别人时乱码），留空即可；想放别处可自行填写并点「保存导出文件夹」</span>
   </div>
 </div>
 
@@ -127,6 +153,7 @@ li.over{border-color:#6366f1}
 let active = [], idle = [];
 let dragFrom = null, dragId = null;
 let curPaths = null;
+let query = '';   // 搜索关键词
 
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 
@@ -231,16 +258,38 @@ function clearOver(){
     document.querySelectorAll('li.over').forEach(x => x.classList.remove('over'));
 }
 
+// 搜索：空格分隔多个关键词，全部命中才算匹配（AND）
+function tokens(){
+    return query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function matchMod(m, ts){
+    if (!ts.length) return true;
+    const hay = [m.name, m.zh, m.cat, m.desc, m.id, m.modversion]
+        .filter(Boolean).join(' ').toLowerCase();
+    return ts.every(w => hay.indexOf(w) >= 0);
+}
+
 function render(){
     const a = document.getElementById('activeList');
     const b = document.getElementById('idleList');
     a.innerHTML = ''; b.innerHTML = '';
-    active.forEach((m, i) => a.appendChild(makeItem(m, i, true)));
-    idle.forEach((m, i) => b.appendChild(makeItem(m, i, false)));
-    document.getElementById('ca').textContent = active.length + ' 个';
-    document.getElementById('ci').textContent = idle.length + ' 个';
-    document.getElementById('stat').textContent =
-        '共 ' + (active.length + idle.length) + ' 个 mod';
+    const ts = tokens();
+    let na = 0, nb = 0;
+    // 序号仍用原始数组下标，这样搜索状态下也能看出它在真实加载顺序里的位置
+    active.forEach((m, i) => { if (matchMod(m, ts)) { a.appendChild(makeItem(m, i, true)); na++; } });
+    idle.forEach((m, i) => { if (matchMod(m, ts)) { b.appendChild(makeItem(m, i, false)); nb++; } });
+    if (ts.length && !na) a.innerHTML = '<li class="empty">没有匹配的 mod</li>';
+    if (ts.length && !nb) b.innerHTML = '<li class="empty">没有匹配的 mod</li>';
+    document.getElementById('ca').textContent =
+        ts.length ? (na + ' / ' + active.length + ' 个') : (active.length + ' 个');
+    document.getElementById('ci').textContent =
+        ts.length ? (nb + ' / ' + idle.length + ' 个') : (idle.length + ' 个');
+    document.getElementById('stat').textContent = ts.length
+        ? '匹配 ' + (na + nb) + ' / 共 ' + (active.length + idle.length) + ' 个 mod'
+        : '共 ' + (active.length + idle.length) + ' 个 mod';
+    const box = document.getElementById('sBox');
+    if (box) box.classList.toggle('has', ts.length > 0);
 }
 
 function show(text, ok){
@@ -249,19 +298,44 @@ function show(text, ok){
     el.className = 'msg ' + (ok ? 'ok' : 'err');
 }
 
+// ---------- 搜索 ----------
+const sInput = document.getElementById('search');
+
+function setQuery(v){
+    query = v || '';
+    sInput.value = query;
+    render();
+}
+
+sInput.addEventListener('input', () => { query = sInput.value; render(); });
+sInput.addEventListener('keydown', e => { if (e.key === 'Escape') setQuery(''); });
+document.getElementById('sclear').onclick = () => { setQuery(''); sInput.focus(); };
+
+// Ctrl+F 或 / 快速聚焦搜索框（在输入框里打字时不拦截）
+document.addEventListener('keydown', e => {
+    const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+    if (e.ctrlKey && e.key === 'f') { e.preventDefault(); sInput.focus(); sInput.select(); return; }
+    if (!typing && e.key === '/') { e.preventDefault(); sInput.focus(); }
+});
+
+// 把当前两栏列表写入游戏配置，返回 { ok, saved, error }
+async function saveNow() {
+    const list = active.map(m => ({ id: m.id, enabled: true }))
+        .concat(idle.map(m => ({ id: m.id, enabled: false })));
+    const r = await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ list })
+    });
+    return await r.json();
+}
+
 document.getElementById('save').onclick = async () => {
     const btn = document.getElementById('save');
     btn.disabled = true;
     btn.textContent = '保存中...';
     try {
-        const list = active.map(m => ({ id: m.id, enabled: true }))
-            .concat(idle.map(m => ({ id: m.id, enabled: false })));
-        const r = await fetch('/api/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ list })
-        });
-        const d = await r.json();
+        const d = await saveNow();
         if (d.ok) {
             show('已写入游戏配置，启用了 ' + d.saved + ' 个 mod。原文件已备份为 config_player.xml.bak', true);
         } else {
@@ -477,6 +551,100 @@ document.getElementById('updates').onclick = async () => {
 document.getElementById('paths').onclick = () => {
     document.getElementById('pathBox').classList.toggle('show');
 };
+﻿// ---------- 导出 / 导入 mod（文件夹） ----------
+async function shareFolder(){
+    const v = (document.getElementById('pShare').value || '').trim();
+    if (v) return v;
+    try {
+        const r = await fetch('/api/share/get');
+        const d = await r.json();
+        if (d && d.ok && d.folder) { document.getElementById('pShare').value = d.folder; return d.folder; }
+    } catch (e) { }
+    show('无法确定导出文件夹，请在「路径设置」里填一个', false);
+    return '';
+}
+
+// 用系统文件管理器打开导出文件夹（导出成功后会自动调用一次）
+async function openFolderNow(){
+    const folder = await shareFolder();
+    if (!folder) return false;
+    try {
+        const r = await fetch('/api/share/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) });
+        const d = await r.json();
+        if (d && d.ok) return true;
+        show('打开文件夹失败：' + ((d && d.error) || '未知错误'), false);
+    } catch (e) { show('打开文件夹失败：' + e.message, false); }
+    return false;
+}
+async function refreshShare(){
+    try {
+        const r = await fetch('/api/share/get');
+        const d = await r.json();
+        if (d && d.ok && d.folder) document.getElementById('pShare').value = d.folder;
+    } catch (e) { }
+}
+document.getElementById('pShareSave').onclick = async () => {
+    const folder = (document.getElementById('pShare').value || '').trim();
+    try {
+        await fetch('/api/share/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) });
+        show(folder ? ('已记住导出文件夹：' + folder) : '已清空（将用默认：软件文件夹里的 exported_mods）', true);
+    } catch (e) { show('保存失败：' + e.message, false); }
+};
+document.getElementById('exportMods').onclick = async () => {
+    const folder = await shareFolder(); if (!folder) return;
+    const list = active.map(m => ({ id: m.id, name: m.name, zh: m.zh || '' }));
+    if (!list.length) { show('当前没有已启用的 mod', false); return; }
+    const btn = document.getElementById('exportMods');
+    btn.disabled = true; btn.textContent = '导出中...';
+    try {
+        const r = await fetch('/api/share/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder, list }) });
+        const d = await r.json();
+        if (d.ok) {
+            let msg = '已导出 ' + d.count + ' 个 mod 文件到：' + folder;
+            if (d.skipped && d.skipped.length) msg += '；' + d.skipped.length + ' 个在本机找不到源目录，已跳过';
+            show(msg + '。已自动打开该文件夹，直接把这个文件夹发给别人，对方用「导入mod文件」即可', true);
+            await openFolderNow();
+        } else show('导出失败：' + d.error, false);
+    } catch (e) { show('导出失败：' + e.message, false); }
+    btn.disabled = false; btn.textContent = '导出mod文件';
+};
+document.getElementById('openFolder').onclick = async () => {
+    const folder = await shareFolder(); if (!folder) return;
+    const btn = document.getElementById('openFolder');
+    btn.disabled = true; btn.textContent = '打开中...';
+    const ok = await openFolderNow();
+    if (ok) show('已打开：' + folder, true);
+    btn.disabled = false; btn.textContent = '打开文件夹';
+};
+document.getElementById('importMods').onclick = async () => {
+    const folder = await shareFolder(); if (!folder) return;
+    const btn = document.getElementById('importMods');
+    btn.disabled = true; btn.textContent = '导入中...';
+    try {
+        const r = await fetch('/api/share/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) });
+        const d = await r.json();
+        if (!d.ok) { show('导入失败：' + d.error, false); return; }
+        await load();
+        const ids = d.active || [];
+        const pool = active.concat(idle);
+        const byId = {}; pool.forEach(m => { byId[m.id] = m; });
+        const newActive = []; let missing = 0;
+        for (const id of ids) { const m = byId[id]; if (m) newActive.push(m); else missing++; }
+        const used = new Set(newActive.map(m => m.id));
+        const newIdle = pool.filter(m => !used.has(m.id));
+        active = newActive; idle = newIdle; render();
+        const s = await saveNow();
+        if (s && s.ok) {
+            let msg = '已导入并写入游戏：启用 ' + active.length + ' 个 mod 文件';
+            if (missing) msg += '；' + missing + ' 个在包里但本机未成功复制，已跳过';
+            show(msg + '。原文件已备份为 config_player.xml.bak', true);
+        } else {
+            show('已复制 mod，但写入游戏失败：' + ((s && s.error) || '未知错误'), false);
+        }
+    } catch (e) { show('导入失败：' + e.message, false); }
+    btn.disabled = false; btn.textContent = '导入mod文件';
+};
+
 
 document.getElementById('pRescan').onclick = async () => {
     const btn = document.getElementById('pRescan');
@@ -530,12 +698,34 @@ document.getElementById('pClear').onclick = async () => {
     } catch (e) { show('清除失败：' + e.message, false); }
 };
 
+
+
+// 「保存退出」：先写入游戏配置，成功后再关掉后台服务并关闭窗口。
+// 保存失败时中止退出，避免丢掉这次的改动。
 document.getElementById('quit').onclick = async () => {
+    const btn = document.getElementById('quit');
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+    let ok = false;
+    try {
+        const d = await saveNow();
+        ok = !!(d && d.ok);
+        if (!ok) show('保存失败，已取消退出：' + ((d && d.error) || '未知错误'), false);
+    } catch (e) {
+        show('保存失败，已取消退出：' + e.message, false);
+    }
+    if (!ok) {
+        btn.disabled = false;
+        btn.textContent = '保存退出';
+        return;
+    }
+    btn.textContent = '正在退出...';
     try { await fetch('/api/quit'); } catch (e) { /* 服务可能已关闭 */ }
     window.close();
 };
 
 load();
+refreshShare();
 </script>
 </body>
 </html>

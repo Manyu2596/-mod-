@@ -1,4 +1,4 @@
-﻿$root = 'D:\BarotraumaModSorter'
+﻿$root = $PSScriptRoot
 $dist = Join-Path $root 'dist\潜渊症Mod管理器'
 
 # 重打包前保留运行时用户数据（手动译文 / 翻译缓存 / 版本基线），打包完成后还原
@@ -12,9 +12,19 @@ foreach ($f in $userData) {
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 
-# 复制运行时与程序文件（自带 node，不依赖系统安装的 Node）
-Copy-Item 'D:\Node\node.exe' (Join-Path $dist 'node.exe') -Force
-foreach ($f in @('server.js', 'ui.html', 'sort.js', 'zh.json', 'fetch_meta.js', 'app.png', 'app.ico')) {
+# Node 运行时：优先用项目目录里的 node.exe，其次用系统 PATH 里的 node
+$nodeSrc = Join-Path $root 'node.exe'
+if (!(Test-Path $nodeSrc)) {
+    $cmd = Get-Command node -ErrorAction SilentlyContinue
+    if ($cmd) { $nodeSrc = $cmd.Source }
+}
+if (!(Test-Path $nodeSrc)) {
+    Write-Host 'node.exe not found: install Node.js, or put node.exe in this folder.'
+    exit 1
+}
+Copy-Item $nodeSrc (Join-Path $dist 'node.exe') -Force
+
+foreach ($f in @('server.js', 'ui.html', 'sort.js', 'zh.json', 'fetch_meta.js', 'app.png', 'app.ico', '潜渊症Mod管理器.vbs')) {
     $p = Join-Path $root $f
     if (Test-Path $p) { Copy-Item $p (Join-Path $dist $f) -Force }
 }
@@ -27,32 +37,12 @@ function W($name, $text) {
     [System.IO.File]::WriteAllText((Join-Path $dist $name), $text, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-# VBScript 必须存成 UTF-16LE(带 BOM)，存 UTF-8 会导致中文字符编译失败
-function WU($name, $text) {
-    [System.IO.File]::WriteAllText((Join-Path $dist $name), $text, [System.Text.Encoding]::Unicode)
-}
-
 $tLaunch = @'
 @echo off
 cd /d "%~dp0"
 "%~dp0node.exe" "%~dp0server.js"
 '@
 W '启动.bat' $tLaunch
-
-$tSilent = @'
-Set fso = CreateObject("Scripting.FileSystemObject")
-here = fso.GetParentFolderName(WScript.ScriptFullName)
-exe = here & "\node.exe"
-js  = here & "\server.js"
-If Not fso.FileExists(exe) Or Not fso.FileExists(js) Then
-  MsgBox "缺少 node.exe 或 server.js，请确认文件完整。", 16, "潜渊症 Mod 管理器"
-  WScript.Quit
-End If
-Set sh = CreateObject("WScript.Shell")
-sh.CurrentDirectory = here
-sh.Run Chr(34) & exe & Chr(34) & " " & Chr(34) & js & Chr(34), 0, False
-'@
-WU '潜渊症Mod管理器.vbs' $tSilent
 
 $tInstall = @'
 $src = $PSScriptRoot
@@ -95,6 +85,11 @@ $tReadme = @'
 【想看日志 / 排查问题】
 双击「启动.bat」：保留黑色命令行窗口，里面能看到路径探测结果。
 
+【导出 / 导入 mod】
+点「导出mod文件」：把当前已启用的 mod（含加载顺序）复制到本目录下的
+exported_mods 文件夹，压缩后发给朋友即可；对方点「导入mod文件」选中
+该文件夹，就会自动复制回他的创意工坊并按原顺序启用。
+
 【换电脑能用吗】
 能。会自动从 Steam 注册表 + Steam 库配置探测游戏与创意工坊目录，
 并从系统 LOCALAPPDATA 推断已安装 mod 目录，无需改代码。
@@ -112,7 +107,7 @@ $tReadme = @'
 【要求】
 64 位 Windows；已安装并至少运行过一次 Steam 版《潜渊症》。
 窗口显示依赖 Edge 或 Chrome（Windows 10/11 自带 Edge）。
-'@ 
+'@
 W '使用说明.txt' $tReadme
 
 Get-ChildItem $dist | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 2) } } | Format-Table -Auto | Out-String | Write-Host

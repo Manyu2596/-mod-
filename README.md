@@ -17,6 +17,7 @@
 | **中文名与简介** | 内置 50+ 个常用 mod 的中文名与用途说明；新 mod 会自动根据内容生成简介 |
 | **路径自动探测** | 从 Steam 注册表与库配置自动找游戏目录和创意工坊目录；找不到可手动指定 |
 | **检查更新** | 对比版本快照，提示哪些 mod 被作者更新了、哪些是新订阅的 |
+| **导出 / 导入 mod 文件** | 「导出mod文件」把当前已启用的 mod（含加载顺序）复制成文件夹，发给别人；对方「导入mod文件」即可一键恢复并写入游戏 |
 | **独立窗口** | App 模式窗口（无地址栏/无标签页），任务栏独立图标，无黑窗口 |
 
 ## 使用方法
@@ -52,6 +53,14 @@ BARO_INSTALLED="%LOCALAPPDATA%\Daedalic Entertainment GmbH\Barotrauma\WorkshopMo
 powershell -ExecutionPolicy Bypass -File 打包.ps1
 # 产物在 dist\潜渊症Mod管理器\
 ```
+
+### 把我的 mod 发给朋友
+
+1. 点「导出mod文件」：已启用的 mod 会按加载顺序复制到软件目录下的 exported_mods（内含 manifest.json 记录顺序），并自动弹出该文件夹
+2. 把 exported_mods 整个文件夹压缩发给对方
+3. 对方解压后点「导入mod文件」，选中该文件夹 → 自动复制回创意工坊、按原顺序启用并写入游戏配置
+
+> 导入只认纯数字的工坊 ID 目录，别的 manifest 内容会被忽略，避免来路不明的包写到别的地方。
 
 ## 排序规则
 
