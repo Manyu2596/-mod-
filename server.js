@@ -8,6 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { exec, execSync } = require('child_process');
+const os = require('os');
 
 const lib = require('./sort.js');
 const { analyze, classify, loadEnabledIds, detectSeries, GAME_VERSION,
@@ -828,7 +829,6 @@ const server = http.createServer((req, res) => {
                         workshop: typeof b.workshop === 'string' ? b.workshop.trim() : undefined,
                         installed: typeof b.installed === 'string' ? b.installed.trim() : undefined,
                         localmods: typeof b.localmods === 'string' ? b.localmods.trim() : undefined,
-                        localmods: typeof b.localmods === 'string' ? b.localmods.trim() : undefined,
                     });
                 }
                 const P = refreshPaths();
@@ -987,6 +987,82 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         });
         return;
     }
+    // 从一个 mod 包文件夹导入：复制到工坊 / 本地 mod 目录，按 manifest 的启用顺序返回
+    function doImport(folder) {
+        if (!fs.existsSync(folder)) throw new Error('还没有可导入的内容：' + folder);
+        const mfPath = path.join(folder, 'manifest.json');
+        if (!fs.existsSync(mfPath)) throw new Error('该文件夹里没有 manifest.json，不是有效的 mod 包');
+        const mf = JSON.parse(fs.readFileSync(mfPath, 'utf8').replace(/^\uFEFF/, ''));
+        const items = (mf.active || []).map(x => ({
+            id: safeModId(typeof x === 'string' ? x : (x && x.id)),
+            name: (x && (x.zh || x.name)) || '',
+        })).filter(o => o.id);
+        if (!items.length) throw new Error('manifest 里没有任何已启用的 mod');
+        const ids = items.map(o => o.id);
+        // 有工坊目录就装到工坊（Steam 版）；没有就装到游戏目录的 LocalMods（非 Steam 版）
+        const P0 = getPaths();
+        const W = (P0.WORKSHOP && fs.existsSync(P0.WORKSHOP)) ? P0.WORKSHOP : (P0.LOCALMODS || '');
+        if (!W) throw new Error('既没有创意工坊目录，也没有本地 mod 目录，无法导入');
+        fs.mkdirSync(W, { recursive: true });
+        let imported = 0; const skipped = [];
+        for (const id of ids) {
+            const src = path.join(folder, id);
+            if (!fs.existsSync(src)) { skipped.push(id); continue; }
+            const dest = path.join(W, id);
+            rmDirSync(dest); copyDir(src, dest); imported++;
+        }
+        return { imported: imported, skipped: skipped, active: ids, items: items };
+    }
+
+    // 对方发来的 zip：解压后直接导入（不用先手动解压、再跑到路径设置里填路径）
+    if (url === '/api/share/import-zip' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw);
+                const name = String(b.name || 'mods.zip');
+                const buf = Buffer.from(String(b.data || ''), 'base64');
+                if (!buf.length) throw new Error('没有收到 zip 内容');
+                const tmp = path.join(os.tmpdir(), 'BaroImport_' + Date.now());
+                rmDirSync(tmp); fs.mkdirSync(tmp, { recursive: true });
+                const zp = path.join(tmp, 'pack.zip');
+                fs.writeFileSync(zp, buf);
+                const ex = path.join(tmp, 'x'); fs.mkdirSync(ex, { recursive: true });
+                try {
+                    execSync('powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path ' +
+                        Q_(zp) + ' -DestinationPath ' + Q_(ex) + ' -Force"',
+                        { timeout: 900000, windowsHide: true, maxBuffer: 1 << 26 });
+                } catch (e) {
+                    execSync('tar -x -f ' + Q_(zp) + ' -C ' + Q_(ex),
+                        { timeout: 900000, windowsHide: true, maxBuffer: 1 << 26 });
+                }
+                // zip 里可能多包一层目录，往下找 manifest.json
+                let target = '';
+                (function walk(d, depth) {
+                    if (target || depth > 4) return;
+                    let ents = [];
+                    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+                    for (const e of ents) {
+                        if (target) return;
+                        const p = path.join(d, e.name);
+                        if (!e.isDirectory()) continue;
+                        if (fs.existsSync(path.join(p, 'manifest.json'))) { target = p; return; }
+                        walk(p, depth + 1);
+                    }
+                })(ex, 0);
+                if (!target && fs.existsSync(path.join(ex, 'manifest.json'))) target = ex;
+                if (!target) throw new Error('这个 zip 里没有 manifest.json，不是本工具导出的 mod 包');
+                const r0 = doImport(target);
+                try { rmDirSync(tmp); } catch (e) { }
+                const out = { ok: true, fromZip: name };
+                Object.keys(r0).forEach(k => { out[k] = r0[k]; });
+                send(res, 200, JSON.stringify(out));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: String(e.message || e).slice(0, 200) })); }
+        });
+        return;
+    }
+
     if (url === '/api/share/import' && req.method === 'POST') {
         let raw = "";
         req.on('data', d => { raw += d; });
@@ -994,29 +1070,8 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             try {
                 const b = JSON.parse(raw);
                 const folder = resolveShareFolder(b.folder);
-                if (!fs.existsSync(folder)) throw new Error('还没有可导入的内容：' + folder);
-                const mfPath = path.join(folder, 'manifest.json');
-                if (!fs.existsSync(mfPath)) throw new Error('该文件夹里没有 manifest.json，不是有效的 mod 包');
-                const mf = JSON.parse(fs.readFileSync(mfPath, 'utf8').replace(/^\uFEFF/, ''));
-                const items = (mf.active || []).map(x => ({
-                    id: safeModId(typeof x === 'string' ? x : (x && x.id)),
-                    name: (x && (x.zh || x.name)) || '',
-                })).filter(o => o.id);
-                if (!items.length) throw new Error('manifest 里没有任何已启用的 mod');
-                const ids = items.map(o => o.id);
-                // 有工坊目录就装到工坊（Steam 版）；没有就装到游戏目录的 LocalMods（非 Steam 版）
-                const P0 = getPaths();
-                const W = (P0.WORKSHOP && fs.existsSync(P0.WORKSHOP)) ? P0.WORKSHOP : (P0.LOCALMODS || '');
-                if (!W) throw new Error('既没有创意工坊目录，也没有本地 mod 目录，无法导入');
-                fs.mkdirSync(W, { recursive: true });
-                let imported = 0; const skipped = [];
-                for (const id of ids) {
-                    const src = path.join(folder, id);
-                    if (!fs.existsSync(src)) { skipped.push(id); continue; }
-                    const dest = path.join(W, id);
-                    rmDirSync(dest); copyDir(src, dest); imported++;
-                }
-                send(res, 200, JSON.stringify({ ok: true, imported, skipped, active: ids, items }));
+                const r0 = doImport(folder);
+                send(res, 200, JSON.stringify({ ok: true, imported: r0.imported, skipped: r0.skipped, active: r0.active, items: r0.items }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
         return;

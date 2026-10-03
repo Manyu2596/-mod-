@@ -108,6 +108,8 @@ li.over{border-color:#6366f1}
   <button id="exportMods">导出mod文件</button>
   <button id="openFolder">打开文件夹</button>
   <button id="importMods">导入mod文件</button>
+  <button id="importZip">导入zip包</button>
+  <input type="file" id="zipFile" accept=".zip" style="display:none">
   <button id="btnPresets">mod方案存档</button>
   <button id="tr">翻译名称（本地 AI）</button>
   <span class="sbox" id="sBox">
@@ -757,6 +759,34 @@ document.getElementById('openFolder').onclick = async () => {
     if (ok) show('已打开：' + folder, true);
     btn.disabled = false; btn.textContent = '打开文件夹';
 };
+// 导入完成后的收尾：刷新列表、按包里的顺序启用、写入游戏、缺件给出订阅入口
+async function applyImported(d) {
+    await load();
+    const ids = d.active || [];
+    const items = d.items || ids.map(id => ({ id: id, name: '' }));
+    const pool = active.concat(idle);
+    const byId = {}; pool.forEach(m => { byId[m.id] = m; });
+    const nameById = {}; items.forEach(o => { nameById[o.id] = o.name; });
+    const newActive = []; let missing = 0; const missList = [];
+    for (const id of ids) {
+        const m = byId[id];
+        if (m) newActive.push(m);
+        else { missing++; if (/^[0-9]{5,}$/.test(String(id))) missList.push({ id: id, name: nameById[id] || id }); }
+    }
+    renderSubscribe(missList);
+    const used = new Set(newActive.map(m => m.id));
+    const newIdle = pool.filter(m => !used.has(m.id));
+    active = newActive; idle = newIdle; render();
+    const s = await saveNow();
+    if (s && s.ok) {
+        let msg = '已导入并写入游戏：启用 ' + active.length + ' 个 mod 文件';
+        if (d.skipped && d.skipped.length) msg += '；' + d.skipped.length + ' 个在包里没有文件，已跳过';
+        if (missing) msg += '；' + missing + ' 个本机缺失，可在下面点 Steam 订阅补齐';
+        show(msg + '。原文件已备份为 config_player.xml.bak（注意：会覆盖这里原来的启用列表）', true);
+    } else {
+        show('已复制 mod，但写入游戏失败：' + ((s && s.error) || '未知错误'), false);
+    }
+}
 document.getElementById('importMods').onclick = async () => {
     const folder = await shareFolder(); if (!folder) return;
     const btn = document.getElementById('importMods');
@@ -765,32 +795,29 @@ document.getElementById('importMods').onclick = async () => {
         const r = await fetch('/api/share/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) });
         const d = await r.json();
         if (!d.ok) { show('导入失败：' + d.error, false); return; }
-        await load();
-        const ids = d.active || [];
-        const items = d.items || ids.map(id => ({ id: id, name: '' }));
-        const pool = active.concat(idle);
-        const byId = {}; pool.forEach(m => { byId[m.id] = m; });
-        const nameById = {}; items.forEach(o => { nameById[o.id] = o.name; });
-        const newActive = []; let missing = 0; const missList = [];
-        for (const id of ids) {
-            const m = byId[id];
-            if (m) newActive.push(m);
-            else { missing++; if (/^[0-9]{5,}$/.test(String(id))) missList.push({ id: id, name: nameById[id] || id }); }
-        }
-        renderSubscribe(missList);
-        const used = new Set(newActive.map(m => m.id));
-        const newIdle = pool.filter(m => !used.has(m.id));
-        active = newActive; idle = newIdle; render();
-        const s = await saveNow();
-        if (s && s.ok) {
-            let msg = '已导入并写入游戏：启用 ' + active.length + ' 个 mod 文件';
-            if (missing) msg += '；' + missing + ' 个本机缺失，可在下面点 Steam 订阅补齐';
-            show(msg + '。原文件已备份为 config_player.xml.bak', true);
-        } else {
-            show('已复制 mod，但写入游戏失败：' + ((s && s.error) || '未知错误'), false);
-        }
+        await applyImported(d);
     } catch (e) { show('导入失败：' + e.message, false); }
     btn.disabled = false; btn.textContent = '导入mod文件';
+};
+// 直接选别人发来的 zip 导入（不用先解压、再去路径设置里填路径）
+document.getElementById('importZip').onclick = () => { document.getElementById('zipFile').click(); };
+document.getElementById('zipFile').onchange = async (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    const btn = document.getElementById('importZip');
+    btn.disabled = true; btn.textContent = '解压导入中...';
+    try {
+        const buf = await f.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        const r = await fetch('/api/share/import-zip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, data: btoa(bin) }) });
+        const d = await r.json();
+        if (!d.ok) { show('导入失败：' + d.error, false); return; }
+        await applyImported(d);
+    } catch (err) { show('导入失败：' + err.message, false); }
+    btn.disabled = false; btn.textContent = '导入zip包';
 };
 
 
