@@ -869,6 +869,19 @@ const server = http.createServer((req, res) => {
                 const ids = (b.list || []).map(x => safeModId(x && x.id)).filter(Boolean);
                 if (!ids.length) throw new Error('当前没有已启用的 mod 可导出');
                 fs.mkdirSync(folder, { recursive: true });
+
+                // 清掉上次导出的残留：只删「看起来像 mod 目录」且这次不在列表里的，避免误删用户别的东西
+                let cleaned = 0;
+                try {
+                    const keep = new Set(ids);
+                    for (const e of fs.readdirSync(folder, { withFileTypes: true })) {
+                        if (!e.isDirectory()) continue;
+                        if (keep.has(e.name)) continue;
+                        if (!safeModId(e.name)) continue;
+                        rmDirSync(path.join(folder, e.name));
+                        cleaned++;
+                    }
+                } catch (e) { /* 清理失败不影响导出 */ }
                 let count = 0; const skipped = [];
                 for (const id of ids) {
                     const src = shareModDir(id);
@@ -893,7 +906,7 @@ const server = http.createServer((req, res) => {
                         fs.writeFileSync(path.join(folder, 'subscribe.html'), html, 'utf8');
                     }
                 } catch (e) { /* 忽略：订阅清单生成失败不影响导出 */ }
-                send(res, 200, JSON.stringify({ ok: true, count, skipped }));
+                send(res, 200, JSON.stringify({ ok: true, count, skipped, cleaned }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
         return;

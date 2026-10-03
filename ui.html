@@ -736,6 +736,7 @@ document.getElementById('exportMods').onclick = async () => {
         if (d.ok) {
             let msg = '已导出 ' + d.count + ' 个 mod 文件到：' + folder;
             if (d.skipped && d.skipped.length) msg += '；' + d.skipped.length + ' 个在本机找不到源目录，已跳过';
+            if (d.cleaned) msg += '；已清掉上次残留的 ' + d.cleaned + ' 个旧 mod（只导出当前启用的这 ' + d.count + ' 个）';
             show(msg + '。已自动打开文件夹：把它整个发给对方即可；里面的 subscribe.html 让对方双击就能一键订阅这些创意工坊 mod', true);
             await openFolderNow();
         } else show('导出失败：' + d.error, false);
