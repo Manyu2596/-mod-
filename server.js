@@ -1077,6 +1077,64 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         return;
     }
     // 用 Steam 客户端或网页订阅创意工坊 mod（导入时缺的、或别人给的清单里的）
+    // 生成订阅清单页面：一条链接对应一个 mod，另有一个「一键订阅全部」按钮
+    function subHtmlFor(list) {
+        const items = list.map(m => '<li><a class="sub" href="steam://subscribe/' + m.id + '">Steam 订阅</a> <b>' +
+            __escShare(m.zh || m.name || m.id) + '</b> <code>' + m.id + '</code> <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id + '">网页打开</a></li>').join('');
+        const ids = list.map(m => m.id);
+        const one = 'steam://subscribe/' + ids.join(',');
+        return '<!doctype html><html><head><meta charset="utf-8"><title>一键订阅 mod</title><style>' +
+            'body{font-family:"Microsoft YaHei",sans-serif;background:#111827;color:#e5e7eb;padding:24px;line-height:1.7}' +
+            'a{color:#818cf8}a.sub{background:#6366f1;color:#fff;padding:3px 10px;border-radius:6px;text-decoration:none;margin-right:8px}' +
+            'li{margin:6px 0}code{color:#9ca3af}button{background:#6366f1;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer}' +
+            'input{background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;border-radius:6px;padding:6px 9px;width:min(760px,90%)}' +
+            '</style></head><body><h2>共 ' + list.length + ' 个创意工坊 mod</h2>' +
+            '<div class="pbtns"><button id="all">一键订阅全部</button>' +
+            '<a class="sub" href="' + one + '">Steam 合并链接（部分版本只认第一个）</a></div>' +
+            '<p><input id="one" readonly value="' + one + '"></p>' +
+            '<ol>' + items + '</ol>' +
+            '<p>点「Steam 订阅」会拉起 Steam 客户端并弹出订阅确认；也可以点「网页打开」在社区页手动点「+ 订阅」。</p>' +
+            '<script>var ids=' + JSON.stringify(ids) + ';' +
+            'document.getElementById("all").onclick=function(){ids.forEach(function(id,i){setTimeout(function(){location.href="steam://subscribe/"+id;},i*500);});};' +
+            'var o=document.getElementById("one");o.onclick=function(){o.select();};' +
+            '</script></body></html>';
+    }
+
+    // 生成可发给别人的订阅链接（steam:// 协议 / 社区网页 / 订阅清单页面）
+    if (url === '/api/steam/link' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const all = (b.list || []).map(m => ({
+                    id: String((m && m.id) == null ? '' : m.id).trim(),
+                    name: (m && (m.name || '')) || '',
+                    zh: (m && (m.zh || '')) || '',
+                }));
+                const ws = all.filter(m => __isWs(m.id));
+                if (!ws.length) throw new Error('当前这套里没有可订阅的创意工坊 mod（本地 mod 只能发文件）');
+                const steam = ws.map(m => 'steam://subscribe/' + m.id);
+                const web = ws.map(m => 'https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id);
+                const text = ws.map(m => (m.zh || m.name || m.id) + '  ' + 'steam://subscribe/' + m.id).join('\n');
+                // 顺手把订阅清单页面写到导出文件夹，方便连文件一起发
+                let html = '';
+                try {
+                    const folder = resolveShareFolder(b.folder);
+                    fs.mkdirSync(folder, { recursive: true });
+                    html = path.join(folder, 'subscribe.html');
+                    fs.writeFileSync(html, subHtmlFor(ws), 'utf8');
+                } catch (e) { html = ''; }
+                send(res, 200, JSON.stringify({
+                    ok: true, count: ws.length, local: all.length - ws.length,
+                    steam: steam.join('\n'), steamAll: 'steam://subscribe/' + ws.map(m => m.id).join(','),
+                    web: web.join('\n'), text: text, html: html,
+                }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
     if (url === '/api/steam/subscribe' && req.method === 'POST') {
         let raw = '';
         req.on('data', d => { raw += d; });
