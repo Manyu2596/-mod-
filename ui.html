@@ -129,6 +129,8 @@ li.over{border-color:#6366f1}
   <div class="prow"><span class="plabel">游戏目录</span><input id="pGame" spellcheck="false" placeholder="例：D:\Steam\steamapps\common\Barotrauma"><span class="pok" id="okGame"></span></div>
   <div class="prow"><span class="plabel">创意工坊</span><input id="pShop" spellcheck="false" placeholder="例：D:\Steam\steamapps\workshop\content\602960"><span class="pok" id="okShop"></span></div>
   <div class="prow"><span class="plabel">已安装mod</span><input id="pInst" spellcheck="false" placeholder="留空 = 自动（%LOCALAPPDATA% 下）"><span class="pok" id="okInst"></span></div>
+  <div class="prow"><span class="plabel">本地mod目录</span><input id="pLocal" spellcheck="false" placeholder="留空 = 自动（游戏目录里的 LocalMods）"><span class="pok" id="okLocal"></span></div>
+  <div class="hint" id="nonSteamTip" style="display:none;margin:6px 0 0 92px">没检测到创意工坊：如果不是 Steam 版，把 mod 文件夹放进上面「本地mod目录」里的一个子文件夹（内含 filelist.xml），再点「扫描路径」就能看到。</div>
   <div class="prow"><span class="plabel">导出文件夹</span><input id="pShare" spellcheck="false" placeholder="留空 = 自动，放在软件文件夹里的 exported_mods"><span class="pok" id="okShare"></span></div>
   <div class="pbtns">
     <button id="pRescan">重新检测</button>
@@ -182,9 +184,13 @@ function fillPaths(){
     document.getElementById('pGame').value = curPaths.game || '';
     document.getElementById('pShop').value = curPaths.workshop || '';
     document.getElementById('pInst').value = curPaths.installed || '';
+    document.getElementById('pLocal').value = curPaths.localmods || '';
     markPath('okGame', curPaths.gameExists);
     markPath('okShop', curPaths.workshopExists);
     markPath('okInst', curPaths.installedExists);
+    markPath('okLocal', curPaths.localmodsExists);
+    const tip = document.getElementById('nonSteamTip');
+    if (tip) tip.style.display = curPaths.workshopExists ? 'none' : 'block';
     const m = curPaths.manual || {};
     const n = ['game', 'workshop', 'installed'].filter(k => m[k]).length;
     const tag = document.getElementById('manualTag');
@@ -792,7 +798,8 @@ document.getElementById('pSave').onclick = async () => {
             body: JSON.stringify({
                 game: document.getElementById('pGame').value,
                 workshop: document.getElementById('pShop').value,
-                installed: document.getElementById('pInst').value
+                installed: document.getElementById('pInst').value,
+                localmods: document.getElementById('pLocal').value
             })
         });
         const d = await r.json();

@@ -65,12 +65,15 @@ function defaultInstalled() {
     return path.join(process.env.LOCALAPPDATA || '', 'Daedalic Entertainment GmbH', 'Barotrauma', 'WorkshopMods', 'Installed');
 }
 
+// 非 Steam 版 / 手动放的 mod：游戏目录下的 LocalMods
+function defaultLocalMods(gameDir) { return path.join(gameDir || '', 'LocalMods'); }
+
 function loadUserPaths() {
     try {
         const j = JSON.parse(fs.readFileSync(PATHS_FILE, 'utf8')) || {};
-        return { game: j.game || '', workshop: j.workshop || '', installed: j.installed || '' };
+        return { game: j.game || '', workshop: j.workshop || '', installed: j.installed || '', localmods: j.localmods || '' };
     } catch (e) {
-        return { game: '', workshop: '', installed: '' };
+        return { game: '', workshop: '', installed: '', localmods: '' };
     }
 }
 
@@ -80,6 +83,7 @@ function saveUserPaths(o) {
         game: o.game !== undefined ? o.game : cur.game,
         workshop: o.workshop !== undefined ? o.workshop : cur.workshop,
         installed: o.installed !== undefined ? o.installed : cur.installed,
+        localmods: o.localmods !== undefined ? o.localmods : cur.localmods,
     };
     fs.writeFileSync(PATHS_FILE, JSON.stringify(next, null, 2), 'utf8');
     return next;
@@ -89,20 +93,22 @@ function saveUserPaths(o) {
 function computePaths() {
     const U = loadUserPaths();
     const D = detectGame();
+    const game = U.game || process.env.BARO_GAME || (D && D.game) || DEFAULT_GAME;
     return {
-        game: U.game || process.env.BARO_GAME || (D && D.game) || DEFAULT_GAME,
+        game,
         workshop: U.workshop || process.env.BARO_WORKSHOP || (D && D.workshop) || DEFAULT_WORKSHOP,
         installed: U.installed || process.env.BARO_INSTALLED || defaultInstalled(),
+        localmods: U.localmods || process.env.BARO_LOCALMODS || defaultLocalMods(game),
     };
 }
 
-let GAME, WORKSHOP, INSTALLED;
-function applyPaths(p) { GAME = p.game; WORKSHOP = p.workshop; INSTALLED = p.installed; }
+let GAME, WORKSHOP, INSTALLED, LOCALMODS;
+function applyPaths(p) { GAME = p.game; WORKSHOP = p.workshop; INSTALLED = p.installed; LOCALMODS = p.localmods || ''; }
 applyPaths(computePaths());
 
 // 运行时可重新探测（比如刚装好游戏 / 改了 Steam 库位置）
 function refreshPaths() { applyPaths(computePaths()); return getPaths(); }
-function getPaths() { return { GAME, WORKSHOP, INSTALLED }; }
+function getPaths() { return { GAME, WORKSHOP, INSTALLED, LOCALMODS }; }
 
 const GAME_VERSION = '1.13.4.0';
 const OUT = path.join(__dirname, 'report.html');
@@ -123,15 +129,18 @@ function loadEnabledIds() {
     const f = path.join(GAME, 'config_player.xml');
     if (!fs.existsSync(f)) return set;
     const txt = fs.readFileSync(f, 'utf8');
-    const re = /Installed[/\\](\d+)[/\\]/gi;
     let m;
-    while ((m = re.exec(txt)) !== null) set.add(m[1]);
+    const reNum = /Installed[/\\](\d+)[/\\]/gi;
+    while ((m = reNum.exec(txt)) !== null) set.add(m[1]);
+    // 本地 mod：取 filelist.xml 的上一级目录名（LocalMods/<名字>/filelist.xml）
+    const reAny = /path="([^"]*?)[/\\]([^/\\]+)[/\\]filelist\.xml"/gi;
+    while ((m = reAny.exec(txt)) !== null) set.add(m[2]);
     return set;
 }
 
 // ---------- 解析单个 mod ----------
-function analyze(id) {
-    const dir = path.join(WORKSHOP, id);
+function analyze(id, base) {
+    const dir = path.join(base || WORKSHOP, id);
     const fl = path.join(dir, 'filelist.xml');
     if (!fs.existsSync(fl)) return null;
 
@@ -168,7 +177,7 @@ function analyze(id) {
 
     return {
         id, name, modversion, gameversion, tags, hasLua, hasCs, deps, topTags,
-        installed: fs.existsSync(path.join(INSTALLED, id)),
+        installed: /^\d{1,20}$/.test(String(id)) ? fs.existsSync(path.join(INSTALLED, id)) : true,
     };
 }
 
@@ -509,5 +518,5 @@ module.exports = {
     analyze, classify, loadEnabledIds, stripAddon, esc, resortActive, detectSeries,
     GAME_VERSION, getPaths, refreshPaths, saveUserPaths, loadUserPaths, PATHS_FILE,
     // 兼容旧用法（初始快照，运行时请用 getPaths()）
-    GAME, WORKSHOP, INSTALLED,
+    GAME, WORKSHOP, INSTALLED, LOCALMODS,
 };

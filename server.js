@@ -208,27 +208,39 @@ function buildData() {
     const userZh = loadUserZh();
 
     const W = getPaths().WORKSHOP;
+    const LM = getPaths().LOCALMODS;
     const mods = [];
-    if (!fs.existsSync(W)) { /* 工坊目录不存在：返回空列表，由界面提示设置路径 */ }
-    else fs.readdirSync(W).forEach(id => {
-        if (!fs.statSync(path.join(W, id)).isDirectory()) return;
-        const a = analyze(id);
-        if (!a) return;
-        const c = classify(a);
-        const patchBonus = /补丁|patch/i.test(a.name) ? -0.5 : 0;
-        const u = userZh[id] || {};
-        const zh = u.zh || trans[a.name] || transIdx[__normName(a.name)] || (zhAll[id] && zhAll[id].zh) || null;
-        const workshop = 'https://steamcommunity.com/sharedfiles/filedetails/?id=' + id;
-        mods.push(Object.assign(a, {
-            tier: c.tier + patchBonus,
-            cat: c.cat,
-            old: a.gameversion !== lib.GAME_VERSION,
-            enabled: enabledIds.has(id),
-            zh,
-            desc: u.desc || (zhAll[id] && zhAll[id].desc) || autoPurpose(a),
-            workshop,
-        }));
-    });
+    const seen = new Set();
+
+    // 扫描一个根目录：工坊（数字 id）与游戏目录里的 LocalMods（英文目录名）都支持
+    const scanOne = (base) => {
+        if (!base || !fs.existsSync(base)) return;
+        fs.readdirSync(base).forEach(id => {
+            if (!fs.statSync(path.join(base, id)).isDirectory()) return;
+            if (seen.has(id)) return;
+            const a = analyze(id, base);
+            if (!a) return;
+            seen.add(id);
+            const c = classify(a);
+            const patchBonus = /补丁|patch/i.test(a.name) ? -0.5 : 0;
+            const u = userZh[id] || {};
+            const zh = u.zh || trans[a.name] || transIdx[__normName(a.name)] || (zhAll[id] && zhAll[id].zh) || null;
+            const numId = /^\d{1,20}$/.test(String(id));
+            mods.push(Object.assign(a, {
+                tier: c.tier + patchBonus,
+                cat: c.cat,
+                old: a.gameversion !== lib.GAME_VERSION,
+                enabled: enabledIds.has(id),
+                zh,
+                desc: u.desc || (zhAll[id] && zhAll[id].desc) || autoPurpose(a),
+                workshop: numId ? ('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id) : '',
+                local: !numId,
+            }));
+        });
+    };
+
+    scanOne(W);     // Steam 创意工坊
+    scanOne(LM);    // 游戏目录里的 LocalMods（非 Steam 版 / 手动放的 mod）
 
     // 已启用的按当前配置顺序，未启用的按推荐顺序
     const active = pkgs
@@ -260,7 +272,11 @@ function save(list) {
         let entry = tagOf[it.id];
         if (!entry) {
             const name = (() => {
-                const fl = path.join(INSTALLED, it.id, 'filelist.xml');
+                let fl = path.join(INSTALLED, it.id, 'filelist.xml');
+                if (!fs.existsSync(fl)) {
+                    const LM2 = getPaths().LOCALMODS;
+                    if (LM2) fl = path.join(LM2, it.id, 'filelist.xml');
+                }
                 if (!fs.existsSync(fl)) return null;
                 const m = /<contentpackage\s+[^>]*?name="([^"]*)"/i.exec(fs.readFileSync(fl, 'utf8'));
                 return m ? m[1] : null;
@@ -268,13 +284,22 @@ function save(list) {
             if (!name) return;
             entry = {
                 name,
-                tag: `<package\n        path="${INSTALLED.replace(/\\/g, '/')}/${it.id}/filelist.xml" />`,
+                tag: `<package\n        path="${pkgPathFor(it.id, INSTALLED)}" />`,
             };
         }
         items.push(entry);
     });
 
-    // 防误清空：原配置里有 mod，但新列表一个都不启用时拒绝写入
+    // 写入配置用的 package 路径：工坊 mod 走 Installed，本地 mod 走游戏目录的 LocalMods
+function pkgPathFor(id, installedDir) {
+    const P = getPaths();
+    let dir = path.join(installedDir, id);
+    if (!fs.existsSync(path.join(dir, 'filelist.xml')) && P.LOCALMODS && fs.existsSync(path.join(P.LOCALMODS, id, 'filelist.xml'))) {
+        dir = path.join(P.LOCALMODS, id);
+    }
+    return dir.replace(/\\/g, '/') + '/filelist.xml';
+}
+// 防误清空：原配置里有 mod，但新列表一个都不启用时拒绝写入
     if (pkgs.length > 0 && items.length === 0) {
         throw new Error('已阻止保存：当前配置有 ' + pkgs.length + ' 个 mod，但新列表为空（防误清空）。若确实要全部停用，请到游戏内操作。');
     }
@@ -531,10 +556,23 @@ function __presetFile(name) {
 }
 
 // mod id 只允许纯数字（Steam 创意工坊 id）：挡住 manifest 里 ../.. 之类的路径穿越
-function safeModId(id) { return /^\d{1,20}$/.test(String(id == null ? '' : id)) ? String(id) : ''; }
+// mod id：工坊是纯数字，本地 mod 是英文目录名；都允许，但仍挡住 ../ 之类的路径穿越
+function safeModId(id) {
+    const s = String(id == null ? '' : id);
+    if (/^\d{1,20}$/.test(s)) return s;
+    if (/^[A-Za-z0-9][A-Za-z0-9._\- ]{0,63}$/.test(s) && s !== '.' && s !== '..') return s;
+    return '';
+}
 
 // 一个 mod 的源目录就是创意工坊下的 <id> 文件夹（管理器只扫描这里）
-function shareModDir(id) { return path.join(getPaths().WORKSHOP, id); }
+function shareModDir(id) {
+    const P = getPaths();
+    const w = path.join(P.WORKSHOP, id);
+    if (fs.existsSync(w)) return w;
+    const l = P.LOCALMODS ? path.join(P.LOCALMODS, id) : '';
+    if (l && fs.existsSync(l)) return l;
+    return w;
+}
 
 // 递归删除（兼容老版本 Node，不用 fs.rmSync）
 function rmDirSync(p) {
@@ -576,7 +614,9 @@ const server = http.createServer((req, res) => {
                 game: P.GAME,
                 workshop: P.WORKSHOP,
                 installed: P.INSTALLED,
+                localmods: P.LOCALMODS,
                 gameExists: fs.existsSync(P.GAME),
+                localmodsExists: !!(P.LOCALMODS && fs.existsSync(P.LOCALMODS)),
                 workshopExists: fs.existsSync(P.WORKSHOP),
                 installedExists: fs.existsSync(P.INSTALLED),
                 manual: loadUserPaths(),
@@ -776,6 +816,8 @@ const server = http.createServer((req, res) => {
                         game: typeof b.game === 'string' ? b.game.trim() : undefined,
                         workshop: typeof b.workshop === 'string' ? b.workshop.trim() : undefined,
                         installed: typeof b.installed === 'string' ? b.installed.trim() : undefined,
+                        localmods: typeof b.localmods === 'string' ? b.localmods.trim() : undefined,
+                        localmods: typeof b.localmods === 'string' ? b.localmods.trim() : undefined,
                     });
                 }
                 const P = refreshPaths();
@@ -894,8 +936,10 @@ const server = http.createServer((req, res) => {
                 })).filter(o => o.id);
                 if (!items.length) throw new Error('manifest 里没有任何已启用的 mod');
                 const ids = items.map(o => o.id);
-                const W = getPaths().WORKSHOP;
-                if (!W) throw new Error('未检测到创意工坊目录，无法导入');
+                // 有工坊目录就装到工坊（Steam 版）；没有就装到游戏目录的 LocalMods（非 Steam 版）
+                const P0 = getPaths();
+                const W = (P0.WORKSHOP && fs.existsSync(P0.WORKSHOP)) ? P0.WORKSHOP : (P0.LOCALMODS || '');
+                if (!W) throw new Error('既没有创意工坊目录，也没有本地 mod 目录，无法导入');
                 fs.mkdirSync(W, { recursive: true });
                 let imported = 0; const skipped = [];
                 for (const id of ids) {
