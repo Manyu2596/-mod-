@@ -846,7 +846,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
 // ---------- 共享文件夹（导出/导入 mod 目录）----------
     if (url === '/api/share/get') {
         const sh = loadShare();
-        send(res, 200, JSON.stringify({ ok: true, folder: sh.folder || defaultShareFolder(), minimize: sh.minimize !== false }));
+        send(res, 200, JSON.stringify({ ok: true, folder: sh.folder || defaultShareFolder(), minimize: sh.minimize === true }));
         return;
     }
 
@@ -857,7 +857,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             try {
                 const b = JSON.parse(raw);
                 const prev = loadShare();
-                saveShare({ folder: (b.folder || '').trim(), minimize: b.minimize === undefined ? (prev.minimize !== false) : !!b.minimize });
+                saveShare({ folder: (b.folder || '').trim(), minimize: b.minimize === undefined ? (prev.minimize === true) : !!b.minimize });
                 send(res, 200, JSON.stringify({ ok: true }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
@@ -964,7 +964,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 fs.mkdirSync(folder, { recursive: true });
                 // Windows：调用独立脚本打开文件夹并强制置前（后台进程直接开 explorer 会被挡在后面）
                 const Q = String.fromCharCode(34);
-                const minimizeAll = (typeof b.minimize === 'boolean') ? b.minimize : (loadShare().minimize !== false);
+                const minimizeAll = (typeof b.minimize === 'boolean') ? b.minimize : (loadShare().minimize === true);
                 let cmd;
                 if (process.platform === 'win32') {
                     const ps1 = path.join(__dirname, 'openFolder.ps1');

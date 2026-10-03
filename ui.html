@@ -140,7 +140,7 @@ li.over{border-color:#6366f1}
     <button id="pSave" class="primary">保存并使用</button>
     <button id="pClear">恢复自动</button>
     <button id="pShareSave">保存导出文件夹</button>
-    <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="pShareMin" checked> 打开文件夹前先最小化所有窗口（游戏全屏时勾这个，文件夹才会弹到最前）</label>
+    <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="pShareMin"> 打开文件夹前先最小化其他窗口（默认不勾；只有全屏游戏挡住文件夹时才需要，且会把游戏收起来）</label>
     <span class="hint">导出文件夹默认就在软件自己的文件夹里（exported_mods，用英文避免发给别人时乱码），留空即可；想放别处可自行填写并点「保存导出文件夹」</span>
   </div>
 </div>
@@ -716,7 +716,7 @@ async function refreshShare(){
         const d = await r.json();
         if (d && d.ok && d.folder) document.getElementById('pShare').value = d.folder;
         const cbMin = document.getElementById('pShareMin');
-        if (cbMin) cbMin.checked = d.minimize !== false;
+        if (cbMin) cbMin.checked = d.minimize === true;
     } catch (e) { }
 }
 document.getElementById('pShareSave').onclick = async () => {
