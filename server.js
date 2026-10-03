@@ -254,15 +254,23 @@ function buildData() {
 }
 
 // ---------- 保存 ----------
-function save(list) {
+function save(list, allowEmpty) {
     // list: [{id, enabled}]，顺序即加载顺序
     const xml = fs.readFileSync(configPath(), 'utf8');
     const pkgs = readPackages();
     const tagOf = {};
     pkgs.forEach(p => { tagOf[p.id] = { tag: p.tag, name: p.name }; });
 
-    // 备份
-    fs.writeFileSync(configPath() + '.bak', xml, 'utf8');
+    // 备份：保留最近 3 份（.bak / .bak1 / .bak2），避免一次保存就把唯一的旧配置覆盖掉
+    try {
+        const cp = configPath();
+        for (let i = 2; i >= 1; i--) {
+            const from = i === 1 ? (cp + '.bak') : (cp + '.bak' + (i - 1));
+            const to = cp + '.bak' + i;
+            if (fs.existsSync(from)) fs.copyFileSync(from, to);
+        }
+        fs.writeFileSync(cp + '.bak', xml, 'utf8');
+    } catch (e) { /* 备份失败不阻断保存 */ }
 
     // 需要在配置里但原本没有的 mod：从 Installed 目录补一条
     const INSTALLED = getPaths().INSTALLED;
@@ -300,8 +308,8 @@ function pkgPathFor(id, installedDir) {
     return dir.replace(/\\/g, '/') + '/filelist.xml';
 }
 // 防误清空：原配置里有 mod，但新列表一个都不启用时拒绝写入
-    if (pkgs.length > 0 && items.length === 0) {
-        throw new Error('已阻止保存：当前配置有 ' + pkgs.length + ' 个 mod，但新列表为空（防误清空）。若确实要全部停用，请到游戏内操作。');
+    if (pkgs.length > 0 && items.length === 0 && !allowEmpty) {
+        throw new Error('已阻止保存：当前配置有 ' + pkgs.length + ' 个 mod，但新列表为空（防误清空）。确实要全部停用请点「清空mod」。');
     }
 
     const inner = '\n' + items.map(e =>
@@ -639,8 +647,8 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const list = JSON.parse(raw).list;
-                const n = save(list);
+                const b = JSON.parse(raw) || {};
+                const n = save(b.list || [], !!b.allowEmpty);
                 send(res, 200, JSON.stringify({ ok: true, saved: n }));
             } catch (e) {
                 send(res, 500, JSON.stringify({ ok: false, error: e.message }));

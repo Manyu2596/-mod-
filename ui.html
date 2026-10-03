@@ -100,6 +100,7 @@ li.over{border-color:#6366f1}
 <div class="bar">
   <button class="primary" id="save">保存到游戏</button>
   <button id="resort">重新排序</button>
+  <button id="clearMods">清空mod</button>
   <button id="test">启动游戏</button>
   <button id="reload">扫描路径</button>
   <button id="updates">检查更新</button>
@@ -329,16 +330,33 @@ document.addEventListener('keydown', e => {
 });
 
 // 把当前两栏列表写入游戏配置，返回 { ok, saved, error }
-async function saveNow() {
+async function saveNow(allowEmpty) {
     const list = active.map(m => ({ id: m.id, enabled: true }))
         .concat(idle.map(m => ({ id: m.id, enabled: false })));
     const r = await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ list })
+        body: JSON.stringify({ list, allowEmpty: !!allowEmpty })
     });
     return await r.json();
 }
+
+// 一键清空：所有 mod 移到未启用，并真正写入游戏配置（空列表也允许保存）
+document.getElementById('clearMods').onclick = async () => {
+    if (!active.length) { show('当前已经没有启用的 mod 了', true); return; }
+    if (!confirm('确定停用全部 ' + active.length + ' 个 mod 吗？\n\n会写入游戏配置（原文件备份为 config_player.xml.bak），之后可在右栏重新启用。')) return;
+    const btn = document.getElementById('clearMods');
+    btn.disabled = true; btn.textContent = '清空中...';
+    try {
+        idle = active.concat(idle);
+        active = [];
+        render();
+        const d = await saveNow(true);
+        if (d.ok) show('已清空：全部 mod 已停用并写入游戏配置。想恢复可在右栏重新启用，或用「mod方案存档」切回', true);
+        else show('清空失败：' + d.error, false);
+    } catch (e) { show('清空失败：' + e.message, false); }
+    btn.disabled = false; btn.textContent = '清空mod';
+};
 
 document.getElementById('save').onclick = async () => {
     const btn = document.getElementById('save');
