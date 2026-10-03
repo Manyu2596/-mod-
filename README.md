@@ -21,13 +21,22 @@
 
 ### 方式一：绿色版（推荐，免安装）
 
-1. 到 **Releases** 下载 `BarotraumaModManager-v1.20.zip`
+1. 到 **Releases** 下载 `BarotraumaModManager-v1.21.zip`
 2. 解压到任意位置
 3. 双击 **`潜渊症Mod管理器.vbs`** → 弹出程序窗口（完全没有安装过程，也没黑窗口）
 
 > 想看日志/排查路径问题：双击 `启动.bat`（会保留命令行窗口并显示探测到的路径）。
 
-### 方式二：从源码运行
+### 方式二：安装版（自动建快捷方式）
+
+1. 到 **Releases** 下载 `BarotraumaModManager-v1.21-Setup.exe`
+2. 双击运行 → 自动安装到 `%LOCALAPPDATA%\潜渊症Mod管理器`，并在桌面与开始菜单生成快捷方式
+3. 装完直接双击快捷方式即可
+
+> 安装包未做数字签名，Windows SmartScreen 可能提示「未知发布者」，点「更多信息 → 仍要运行」。
+> 不想安装就删掉 `%LOCALAPPDATA%\潜渊症Mod管理器` 文件夹和快捷方式，没有注册表残留。
+
+### 方式三：从源码运行
 
 需要本机装有 Node.js 18+：
 
