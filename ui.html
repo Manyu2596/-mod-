@@ -718,7 +718,14 @@ document.getElementById('btnSubLink').onclick = async () => {
         const d = await r.json();
         if (!d.ok) { box.style.display = 'none'; show('生成失败：' + d.error, false); return; }
         const needFile = d.local > 0;
+        const deadNote = (d.dead && d.dead.length)
+            ? '<div style="margin-top:6px;color:#f5c451">⚠ 其中 ' + d.dead.length + ' 个 mod 已从创意工坊失效（被作者删除/转私密），链接里已剔除：' +
+              d.dead.map(m => m.name + ' <code style="color:#9ca3af">' + m.id + '</code>').join('、') +
+              '。本机文件还在所以不影响你继续玩，但别人订阅不了，建议从这套里换掉。</div>'
+            : '';
+        const unNote = d.unchecked ? '<div class="hint" style="margin-top:6px">（没能连上 Steam 校验 mod 是否失效，链接按原样生成）</div>' : '';
         box.innerHTML = '<h3>Steam 订阅链接（' + d.count + ' 个工坊 mod' + (needFile ? ('，另有 ' + d.local + ' 个本地 mod 只能发文件') : '') + '）</h3>' +
+            deadNote + unNote +
             '<div>把下面的链接整段复制，发到群里/私聊；对方点一条就会在 Steam 里弹出订阅确认（需要先开着 Steam 客户端）。</div>' +
             '<textarea id="linkText" readonly rows="6" style="width:100%;margin-top:8px;background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;border-radius:9px;padding:8px 10px;font-size:12.5px;font-family:Consolas,monospace"></textarea>' +
             '<div class="pbtns">' +

@@ -8,6 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { exec, execSync } = require('child_process');
+const https = require('https');
 const os = require('os');
 
 const lib = require('./sort.js');
@@ -1100,11 +1101,42 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             '</script></body></html>';
     }
 
+    // 向 Steam 查询这些创意工坊物品是否还存在（作者删除 / 转私密会查不到）
+    // 成功返回 { map: Map(id->bool) }；网络失败返回 null（此时不做过滤）
+    function checkWsAlive(ids, cb) {
+        const body = 'itemcount=' + ids.length + ids.map((id, i) => '&publishedfileids%5B' + i + '%5D=' + encodeURIComponent(id)).join('');
+        const req = https.request({
+            host: 'api.steampowered.com',
+            path: '/ISteamRemoteStorage/GetPublishedFileDetails/v1/?format=json',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+                        timeout: 8000,
+            // 只读的公开接口；本机常挂着会替换证书的代理，严格校验会连不上
+            rejectUnauthorized: false,
+        }, r => {
+            let d = '';
+            r.on('data', c => d += c);
+            r.on('end', () => {
+                try {
+                    const j = JSON.parse(d);
+                    const arr = (j && j.response && j.response.publishedfiledetails) || [];
+                    const map = new Map();
+                    for (const it of arr) map.set(String(it.publishedfileid), it.result === 1);
+                    cb(map);
+                } catch (e) { cb(null); }
+            });
+        });
+        req.on('timeout', () => { try { req.destroy(); } catch (e) { } cb(null); });
+        req.on('error', () => cb(null));
+        req.write(body);
+        req.end();
+    }
+
     // 生成可发给别人的订阅链接（steam:// 协议 / 社区网页 / 订阅清单页面）
     if (url === '/api/steam/link' && req.method === 'POST') {
         let raw = '';
         req.on('data', d => { raw += d; });
-        req.on('end', () => {
+        req.on('end', async () => {
             try {
                 const b = JSON.parse(raw || '{}');
                 const all = (b.list || []).map(m => ({
@@ -1114,20 +1146,29 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 }));
                 const ws = all.filter(m => __isWs(m.id));
                 if (!ws.length) throw new Error('当前这套里没有可订阅的创意工坊 mod（本地 mod 只能发文件）');
-                const steam = ws.map(m => 'steam://subscribe/' + m.id);
-                const web = ws.map(m => 'https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id);
-                const text = ws.map(m => (m.zh || m.name || m.id) + '  ' + 'steam://subscribe/' + m.id).join('\n');
+                // 先校验哪些 mod 在创意工坊还能打开，失效的从链接里剔除（本机还能用，只是订阅不了）
+                const alive = await new Promise(resolve => checkWsAlive(ws.map(m => m.id), resolve));
+                let dead = [];
+                let live = ws;
+                if (alive) {
+                    dead = ws.filter(m => alive.get(m.id) === false).map(m => ({ id: m.id, name: m.zh || m.name || m.id }));
+                    live = ws.filter(m => alive.get(m.id) !== false);
+                    if (!live.length) throw new Error('这套里的工坊 mod 全部已从创意工坊失效（被作者删除/转私密），订阅链接生成不了');
+                }
+                const steam = live.map(m => 'steam://subscribe/' + m.id);
+                const web = live.map(m => 'https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id);
+                const text = live.map(m => (m.zh || m.name || m.id) + '  ' + 'steam://subscribe/' + m.id).join('\n');
                 // 顺手把订阅清单页面写到导出文件夹，方便连文件一起发
                 let html = '';
                 try {
                     const folder = resolveShareFolder(b.folder);
                     fs.mkdirSync(folder, { recursive: true });
                     html = path.join(folder, 'subscribe.html');
-                    fs.writeFileSync(html, subHtmlFor(ws), 'utf8');
+                    fs.writeFileSync(html, subHtmlFor(live), 'utf8');
                 } catch (e) { html = ''; }
                 send(res, 200, JSON.stringify({
-                    ok: true, count: ws.length, local: all.length - ws.length,
-                    steam: steam.join('\n'), steamAll: 'steam://subscribe/' + ws.map(m => m.id).join(','),
+                    ok: true, count: live.length, local: all.length - ws.length, dead: dead, unchecked: alive ? 0 : 1,
+                    steam: steam.join('\n'), steamAll: 'steam://subscribe/' + live.map(m => m.id).join(','),
                     web: web.join('\n'), text: text, html: html,
                 }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
