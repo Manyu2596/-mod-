@@ -593,11 +593,11 @@ async function shareFolder(){
 }
 
 // 用系统文件管理器打开导出文件夹（导出成功后会自动调用一次）
-async function openFolderNow(){
+async function openFolderNow(selectFile){
     const folder = await shareFolder();
     if (!folder) return false;
     try {
-        const r = await fetch('/api/share/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder, minimize: (document.getElementById('pShareMin') || {}).checked }) });
+        const r = await fetch('/api/share/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder, select: selectFile || '', minimize: (document.getElementById('pShareMin') || {}).checked }) });
         const d = await r.json();
         if (d && d.ok) return true;
         show('打开文件夹失败：' + ((d && d.error) || '未知错误'), false);
@@ -737,8 +737,13 @@ document.getElementById('exportMods').onclick = async () => {
             let msg = '已导出 ' + d.count + ' 个 mod 文件到：' + folder;
             if (d.skipped && d.skipped.length) msg += '；' + d.skipped.length + ' 个在本机找不到源目录，已跳过';
             if (d.cleaned) msg += '；已清掉上次残留的 ' + d.cleaned + ' 个旧 mod（只导出当前启用的这 ' + d.count + ' 个）';
-            show(msg + '。已自动打开文件夹：把它整个发给对方即可；里面的 subscribe.html 让对方双击就能一键订阅这些创意工坊 mod', true);
-            await openFolderNow();
+            if (d.zip) {
+                show(msg + '。已打包成 ' + d.zip + '，直接把这个 zip 发给对方即可（里面也有 subscribe.html 可一键订阅）', true);
+                await openFolderNow(d.zip);
+            } else {
+                show(msg + (d.zipError ? ('（打包 zip 失败：' + d.zipError + '，可以手动压缩这个文件夹）') : '') + '。已打开文件夹：把它整个发给对方即可', true);
+                await openFolderNow();
+            }
         } else show('导出失败：' + d.error, false);
     } catch (e) { show('导出失败：' + e.message, false); }
     btn.disabled = false; btn.textContent = '导出mod文件';

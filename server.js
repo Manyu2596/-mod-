@@ -7,7 +7,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { exec, execSync } = require('child_process');
 
 const lib = require('./sort.js');
 const { analyze, classify, loadEnabledIds, detectSeries, GAME_VERSION,
@@ -536,7 +536,10 @@ function openAppWindow(u) {
     try { exec(`cmd /c start "" "${u}"`); return true; } catch (e) { return false; }
 }
 
-﻿// ---------- 共享文件夹（导出/导入 mod 目录）----------
+﻿// 给 PowerShell 命令里的路径加单引号（路径里的 ' 转义成两个）
+function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
+
+// ---------- 共享文件夹（导出/导入 mod 目录）----------
 const SHARE_FILE = path.join(__dirname, 'share.json');
 function loadShare() { try { return JSON.parse(fs.readFileSync(SHARE_FILE, 'utf8')); } catch (e) { return {}; } }
 function saveShare(o) { fs.writeFileSync(SHARE_FILE, JSON.stringify(o, null, 2), 'utf8'); }
@@ -837,7 +840,10 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-﻿    // ---------- 共享文件夹（导出/导入 mod 目录）----------
+﻿    // 给 PowerShell 命令里的路径加单引号（路径里的 ' 转义成两个）
+function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
+
+// ---------- 共享文件夹（导出/导入 mod 目录）----------
     if (url === '/api/share/get') {
         const sh = loadShare();
         send(res, 200, JSON.stringify({ ok: true, folder: sh.folder || defaultShareFolder(), minimize: sh.minimize !== false }));
@@ -906,7 +912,43 @@ const server = http.createServer((req, res) => {
                         fs.writeFileSync(path.join(folder, 'subscribe.html'), html, 'utf8');
                     }
                 } catch (e) { /* 忽略：订阅清单生成失败不影响导出 */ }
-                send(res, 200, JSON.stringify({ ok: true, count, skipped, cleaned }));
+                // 打包成 zip，方便直接发给别人（放在导出文件夹旁边，不塞进自己里面）
+                let zipPath = '', zipError = '', zipSize = 0;
+                if (b.zip !== false) {
+                    try {
+                        const stamp = new Date();
+                        const p2 = n => (n < 10 ? '0' : '') + n;
+                        const tag = stamp.getFullYear() + p2(stamp.getMonth() + 1) + p2(stamp.getDate()) + '-' + p2(stamp.getHours()) + p2(stamp.getMinutes());
+                        const outDir = path.dirname(folder);
+                        // 文件名带「几个 mod + 时间」，一眼看出这一包是哪次导出的
+                        zipPath = path.join(outDir, 'BarotraumaMods-' + count + 'mods-' + tag + '.zip');
+                        // 只留最新这一包，免得越攒越多
+                        try {
+                            for (const f of fs.readdirSync(outDir)) {
+                                if (/^BarotraumaMods-\d+mods-\d{8}-\d{4}\.zip$/i.test(f) || f.toLowerCase() === 'mods_pack.zip') {
+                                    try { fs.unlinkSync(path.join(outDir, f)); } catch (e) { }
+                                }
+                            }
+                        } catch (e) { }
+                        try {
+                            const cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path ' +
+                                Q_(path.join(folder, '*')) + ' -DestinationPath ' + Q_(zipPath) +
+                                ' -CompressionLevel Optimal -Force"';
+                            execSync(cmd, { timeout: 900000, windowsHide: true, maxBuffer: 1 << 26 });
+                        } catch (e) {
+                            // Compress-Archive 对超 2GB / 超长路径会失败，回退到系统自带 tar
+                            zipError = String(e.message || e).slice(0, 80);
+                            try {
+                                execSync('tar -a -c -f ' + Q_(zipPath) + ' -C ' + Q_(folder) + ' .',
+                                    { timeout: 900000, windowsHide: true, maxBuffer: 1 << 26 });
+                                zipError = '';
+                            } catch (e2) { zipError = String(e2.message || e2).slice(0, 120); }
+                        }
+                        if (fs.existsSync(zipPath)) { zipSize = fs.statSync(zipPath).size; zipError = ''; }
+                        else { zipError = zipError || '压缩失败（未生成文件）'; zipPath = ''; }
+                    } catch (e) { zipError = String(e.message || e).slice(0, 120); zipPath = ''; }
+                }
+                send(res, 200, JSON.stringify({ ok: true, count, skipped, cleaned, zip: zipPath, zipSize, zipError }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
         return;
@@ -926,10 +968,15 @@ const server = http.createServer((req, res) => {
                 let cmd;
                 if (process.platform === 'win32') {
                     const ps1 = path.join(__dirname, 'openFolder.ps1');
+                // select：导出完要直接选中那个 zip，省得再找
+                const sel = (b.select && fs.existsSync(String(b.select))) ? String(b.select) : '';
                     if (fs.existsSync(ps1)) {
-                        cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' + Q + ps1 + Q + ' -Folder ' + Q + folder + Q + (minimizeAll ? ' -Minimize 1' : '');
+                        cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' + Q + ps1 + Q + ' -Folder ' + Q + folder + Q +
+                        (minimizeAll ? ' -Minimize 1' : '') + (sel ? (' -Select ' + Q + sel + Q) : '');
                     } else {
-                        cmd = 'cmd /c explorer ' + Q + folder + Q;
+                        cmd = sel
+                        ? ('cmd /c explorer /select,' + Q + sel + Q)
+                        : ('cmd /c explorer ' + Q + folder + Q);
                     }
                 } else {
                     cmd = 'xdg-open ' + Q + folder + Q;
