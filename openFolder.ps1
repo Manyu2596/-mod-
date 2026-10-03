@@ -1,5 +1,5 @@
 ﻿# 打开文件夹并把窗口强制切到前台（供管理器调用）
-param([string]$folder, [switch]$Minimize)
+param([string]$folder, [switch]$Minimize, [string]$Select)
 
 if (-not $folder) { exit 1 }
 if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
@@ -74,6 +74,16 @@ function ActivateWindow([IntPtr]$hwnd) {
 # 全屏游戏会锁住前台，任何程序都抢不过它；此时先把别的窗口收起来，再打开文件夹
 if ($Minimize) { Minimize-Others; Start-Sleep -Milliseconds 400 }
 $shell.Open($folder)
+
+# 只想选中某个文件（比如刚导出的 zip）：打开所在文件夹并选中它
+if ($Select) {
+    if (-not (Test-Path $Select)) { $Select = $null }
+    else {
+        Start-Process -FilePath 'explorer.exe' -ArgumentList ('/select,"' + $Select + '"')
+        Start-Sleep -Milliseconds 600
+    }
+}
+if ($Select) { exit 0 }
 
 $needle = $folder.ToLower()
 $target = $null
