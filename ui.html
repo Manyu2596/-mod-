@@ -738,7 +738,8 @@ document.getElementById('exportMods').onclick = async () => {
             if (d.skipped && d.skipped.length) msg += '；' + d.skipped.length + ' 个在本机找不到源目录，已跳过';
             if (d.cleaned) msg += '；已清掉上次残留的 ' + d.cleaned + ' 个旧 mod（只导出当前启用的这 ' + d.count + ' 个）';
             if (d.zip) {
-                show(msg + '。已打包成 ' + d.zip + '，直接把这个 zip 发给对方即可（里面也有 subscribe.html 可一键订阅）', true);
+                const mb = d.zipSize ? '（' + (d.zipSize / 1048576).toFixed(1) + ' MB）' : '';
+                show(msg + '。已打包成 ' + d.zip + mb + '，直接把这个 zip 发给对方即可（里面也有 subscribe.html 可一键订阅）', true);
                 await openFolderNow(d.zip);
             } else {
                 show(msg + (d.zipError ? ('（打包 zip 失败：' + d.zipError + '，可以手动压缩这个文件夹）') : '') + '。已打开文件夹：把它整个发给对方即可', true);
