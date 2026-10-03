@@ -724,7 +724,7 @@ document.getElementById('btnSubLink').onclick = async () => {
               '。本机文件还在所以不影响你继续玩，但别人订阅不了，建议从这套里换掉。</div>'
             : '';
         const unNote = d.unchecked ? '<div class="hint" style="margin-top:6px">（没能连上 Steam 校验 mod 是否失效，链接按原样生成）</div>' : '';
-        box.innerHTML = '<h3>Steam 订阅链接（' + d.count + ' 个工坊 mod' + (needFile ? ('，另有 ' + d.local + ' 个本地 mod 只能发文件') : '') + '）</h3>' +
+        box.innerHTML = '<h3>Steam 订阅链接（' + d.count + ' 个工坊 mod' + (needFile ? ('，另有 ' + d.local + ' 个本地 mod 只能发文件') : '') + '）<span style="color:#9ca3af;font-weight:400;font-size:12px"> 生成于 ' + (d.genAt || '') + '</span></h3>' +
             deadNote + unNote +
             '<div>把下面的链接整段复制，发到群里/私聊；对方点一条就会在 Steam 里弹出订阅确认（需要先开着 Steam 客户端）。</div>' +
             '<textarea id="linkText" readonly rows="6" style="width:100%;margin-top:8px;background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;border-radius:9px;padding:8px 10px;font-size:12.5px;font-family:Consolas,monospace"></textarea>' +
@@ -736,6 +736,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             '<button id="linkSteamAll">自己先订阅一遍</button>' +
             '<button id="linkHtml">打开订阅清单页面</button>' +
             '<button id="linkColl">做 Steam 合集（一次订阅全部）</button>' +
+            '<button id="linkVerify">校验链接</button>' +
             '<button id="linkClose">关闭</button>' +
             '</div>' +
             '<div class="hint" style="margin-top:6px">Steam 的协议一次只确认一个 mod；想让对方「一次订阅全部」，用「做 Steam 合集」——把 mod 加进合集后分享合集链接，对方点「订阅全部」即可。</div>' +
@@ -753,13 +754,34 @@ document.getElementById('btnSubLink').onclick = async () => {
             catch (e) { document.execCommand('copy'); show('已复制（若没生效请手动 Ctrl+C）', true); }
         };
         document.getElementById('linkSteamAll').onclick = async () => {
-            const ids = (active || []).map(m => m.id).filter(id => /^[0-9]{5,}$/.test(String(id)));
+            const ids = (d.liveIds && d.liveIds.length) ? d.liveIds : (active || []).map(m => m.id).filter(id => /^[0-9]{5,}$/.test(String(id)));
             if (!ids.length) { show('没有可订阅的工坊 mod', false); return; }
             const rr = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: ids, mode: 'steam' }) });
             const dd = await rr.json();
             show(dd.ok ? ('已拉起 Steam，请在弹出的窗口里确认订阅（共 ' + dd.count + ' 个）') : ('订阅失败：' + dd.error), !!dd.ok);
         };
-        document.getElementById('linkHtml').onclick = async () => { await openFolderNow(d.html || ''); };
+        document.getElementById('linkHtml').onclick = async () => {
+            const target = d.htmlOpen || d.html || '';
+            if (!target) { show('订阅清单页面没生成成功', false); return; }
+            await fetch('/api/share/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: (document.getElementById('pShare') || {}).value || '', select: target, browser: true }) });
+            show('已用浏览器打开刚生成的订阅清单页面（文件名带时间戳，不会是旧的一版）', true);
+        };
+        document.getElementById('linkVerify').onclick = async () => {
+            const vb = document.getElementById('linkVerify');
+            vb.disabled = true; vb.textContent = '校验中...';
+            try {
+                const rr = await fetch('/api/steam/verify-links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ list: list }) });
+                const dd = await rr.json();
+                if (!dd.ok) { show('校验失败：' + dd.error, false); return; }
+                const un = dd.unknown || [];
+                let msg = dd.bad.length
+                    ? ('有 ' + dd.bad.length + ' 条链接网页打不开（多半是 mod 被作者删了）：' + dd.bad.map(x => (x.name || x.id) + '(' + x.id + ') ' + x.status).join('、'))
+                    : ('全部 ' + dd.total + ' 条链接网页都能正常打开');
+                if (un.length) msg += '；另有 ' + un.length + ' 条因 Steam 限流没查到结果（' + un.map(x => x.id + ':' + x.status).slice(0, 5).join(',') + '），过几分钟再点一次校验即可';
+                show(msg, !dd.bad.length);
+            } catch (e) { show('校验失败：' + e.message, false); }
+            vb.disabled = false; vb.textContent = '校验链接';
+        };
         document.getElementById('linkColl').onclick = () => {
             window.open('https://steamcommunity.com/workshop/managecollection/?appid=602960', '_blank');
             show('已打开 Steam 合集创建页：新建合集 → 把上面这些 mod 加进去 → 分享合集链接，对方点「订阅全部」即可', true);

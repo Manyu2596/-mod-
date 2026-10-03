@@ -869,7 +869,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     if (url === '/api/share/export' && req.method === 'POST') {
         let raw = '';
         req.on('data', d => { raw += d; });
-        req.on('end', () => {
+        req.on('end', async () => {
             try {
                 const b = JSON.parse(raw);
                 const folder = resolveShareFolder(b.folder);
@@ -906,11 +906,16 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 fs.writeFileSync(path.join(folder, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
                 // 顺带生成订阅清单：对方不想拷大文件时，直接在这里订阅创意工坊 mod
                 try {
-                    const wsList = (b.list || []).filter(m => __isWs(m && m.id));
+                    const wsList = (b.list || []).filter(m => __isWs(m && m.id))
+                        .map(m => ({ id: String(m.id), name: m.name || '', zh: m.zh || '' }));
                     if (wsList.length) {
-                        const items = wsList.map(m => '<li><a class="sub" href="steam://subscribe/' + m.id + '">Steam 订阅</a> <b>' + __escShare(m.zh || m.name || m.id) + '</b> <code>' + m.id + '</code> <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id + '">网页打开</a></li>').join('');
-                        const html = '<!doctype html><html><head><meta charset="utf-8"><title>一键订阅 mod</title><style>body{font-family:"Microsoft YaHei",sans-serif;background:#111827;color:#e5e7eb;padding:24px;line-height:1.7}a{color:#818cf8}a.sub{background:#6366f1;color:#fff;padding:3px 10px;border-radius:6px;text-decoration:none;margin-right:8px}li{margin:6px 0}code{color:#9ca3af}</style></head><body><h2>共 ' + wsList.length + ' 个创意工坊 mod</h2><ol>' + items + '</ol><p>点「Steam 订阅」会拉起 Steam 客户端并弹出订阅确认；也可以点「网页打开」在社区页手动点「+ 订阅」。</p></body></html>';
-                        fs.writeFileSync(path.join(folder, 'subscribe.html'), html, 'utf8');
+                        // 失效的（被作者删除/转私密）不能进订阅清单，否则对方点了就是 404 报错页
+                        const aliveMap = await new Promise(resolve => checkWsAlive(wsList.map(m => m.id), resolve));
+                        const liveList = aliveMap ? wsList.filter(m => aliveMap.get(m.id) !== false) : wsList;
+                        if (liveList.length) {
+                            const genAt2 = new Date().toLocaleString('zh-CN', { hour12: false });
+                            fs.writeFileSync(path.join(folder, 'subscribe.html'), subHtmlFor(liveList, genAt2), 'utf8');
+                        }
                     }
                 } catch (e) { /* 忽略：订阅清单生成失败不影响导出 */ }
                 // 打包成 zip，方便直接发给别人（放在导出文件夹旁边，不塞进自己里面）
@@ -961,6 +966,15 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('end', () => {
             try {
                 const b = JSON.parse(raw);
+                // browser：直接用默认浏览器打开（订阅清单页面），绕开浏览器对同名本地文件的缓存
+                if (b.browser && b.select && fs.existsSync(String(b.select))) {
+                    const sel0 = String(b.select);
+                    const furl = 'file:///' + sel0.split('\\').join('/').replace(/^\/+/, '');
+                    const Q0 = String.fromCharCode(34);
+                    try { exec('cmd /c start ' + Q0 + Q0 + ' ' + Q0 + furl + Q0, () => { }); } catch (e) { }
+                    send(res, 200, JSON.stringify({ ok: true, opened: sel0 }));
+                    return;
+                }
                 const folder = resolveShareFolder(b.folder);
                 fs.mkdirSync(folder, { recursive: true });
                 // Windows：调用独立脚本打开文件夹并强制置前（后台进程直接开 explorer 会被挡在后面）
@@ -1079,24 +1093,25 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     }
     // 用 Steam 客户端或网页订阅创意工坊 mod（导入时缺的、或别人给的清单里的）
     // 生成订阅清单页面：一条链接对应一个 mod，另有一个「一键订阅全部」按钮
-    function subHtmlFor(list) {
+    function subHtmlFor(list, genAt) {
         const items = list.map(m => '<li><a class="sub" href="steam://subscribe/' + m.id + '">Steam 订阅</a> <b>' +
             __escShare(m.zh || m.name || m.id) + '</b> <code>' + m.id + '</code> <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id + '">网页打开</a></li>').join('');
         const ids = list.map(m => m.id);
         const one = 'steam://subscribe/' + ids.join(',');
-        return '<!doctype html><html><head><meta charset="utf-8"><title>一键订阅 mod</title><style>' +
+        return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>一键订阅 mod</title><style>' +
             'body{font-family:"Microsoft YaHei",sans-serif;background:#111827;color:#e5e7eb;padding:24px;line-height:1.7}' +
             'a{color:#818cf8}a.sub{background:#6366f1;color:#fff;padding:3px 10px;border-radius:6px;text-decoration:none;margin-right:8px}' +
             'li{margin:6px 0}code{color:#9ca3af}button{background:#6366f1;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer}' +
             'input{background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;border-radius:6px;padding:6px 9px;width:min(760px,90%)}' +
-            '</style></head><body><h2>共 ' + list.length + ' 个创意工坊 mod</h2>' +
+            '</style></head><body><h2>共 ' + list.length + ' 个创意工坊 mod</h2>' + (genAt ? '<div style="color:#9ca3af;font-size:12px;margin:2px 0 10px">生成时间：' + genAt + '</div>' : '') +
             '<div class="pbtns"><button id="all">一键订阅全部</button>' +
             '<a class="sub" href="' + one + '">Steam 合并链接（部分版本只认第一个）</a></div>' +
             '<p><input id="one" readonly value="' + one + '"></p>' +
             '<ol>' + items + '</ol>' +
             '<p>点「Steam 订阅」会拉起 Steam 客户端并弹出订阅确认；也可以点「网页打开」在社区页手动点「+ 订阅」。</p>' +
+            '<p style="color:#9ca3af;font-size:12px">若打开后提示「该物品不存在」：先确认浏览器里已登录 Steam；短时间内点太多条也会被 Steam 限流，隔一会儿再点即可。</p>' +
             '<script>var ids=' + JSON.stringify(ids) + ';' +
-            'document.getElementById("all").onclick=function(){ids.forEach(function(id,i){setTimeout(function(){location.href="steam://subscribe/"+id;},i*500);});};' +
+            'document.getElementById("all").onclick=function(){ids.forEach(function(id,i){setTimeout(function(){location.href="steam://subscribe/"+id;},i*1200);});};' +
             'var o=document.getElementById("one");o.onclick=function(){o.select();};' +
             '</script></body></html>';
     }
@@ -1132,6 +1147,80 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.end();
     }
 
+    // 逐个打开社区页面，确认链接真的打得开（私密 / 地区限制 / 被移除 / 被限流都会在网页上表现为报错）
+    // 注意：每个工坊页都内嵌一段「This item has been removed...」的隐藏模板，不能拿它当失效依据
+    function checkWsWebAlive(ids, cb) {
+        const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept-Language': 'zh-CN,zh' };
+        const one = (id, retry) => new Promise(resolve => {
+            const rq = https.request('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id, {
+                method: 'GET', timeout: 15000, rejectUnauthorized: false, headers: UA
+            }, r => {
+                let b = ''; let done = false;
+                const finish = () => {
+                    if (done) return;
+                    done = true;
+                    const t = (b.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
+                    // bannedNotification 是每页都带的隐藏模板，只有真的被移除时才是 display:block
+                    const bn = b.indexOf('bannedNotification');
+                    const banned = bn >= 0 && /display:\s*block/.test(b.slice(bn, bn + 300));
+                    const err = /::\s*Error\s*$/.test(t) || t.indexOf('错误') >= 0 ||
+                        b.indexOf('抱歉！处理您的请求时遇到错误') >= 0 || b.indexOf('该物品不存在') >= 0 ||
+                        b.indexOf('The item does not exist') >= 0 || b.indexOf('No item could be found') >= 0 ||
+                        b.indexOf('It is only visible to you') >= 0 || banned;
+                    resolve({ id: id, status: r.statusCode, title: t.slice(0, 80), err: err, limited: r.statusCode === 429 });
+                };
+                r.setEncoding('utf8');
+                r.on('data', c => { b += c; if (b.length > 60000) { try { r.destroy(); } catch (e) { } finish(); } });
+                r.on('end', finish);
+                r.on('close', finish);
+            });
+            rq.on('timeout', () => { try { rq.destroy(); } catch (e) { } resolve({ id: id, status: 'TIMEOUT', limited: true }); });
+            rq.on('error', e => resolve({ id: id, status: 'ERR' + (e.code || e.message), limited: true }));
+            rq.end();
+        }).then(r => {
+            const needRetry = r.limited || r.status === 'TIMEOUT' || String(r.status).indexOf('ERR') === 0;
+            if (needRetry && retry > 0) return new Promise(s => setTimeout(s, 2500)).then(() => one(id, retry - 1));
+            return r;
+        });
+        const out = [];
+        let i = 0;
+        const step = () => {
+            if (i >= ids.length) return Promise.resolve();
+            const batch = ids.slice(i, i + 2); i += 2;
+            return Promise.all(batch.map(id => one(id, 2)))
+                .then(rs => { rs.forEach(r => out.push(r)); return new Promise(s => setTimeout(s, 800)).then(step); });
+        };
+        step().then(() => cb(out));
+    }
+
+    if (url === '/api/steam/verify-links' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const src = (b.list || []).map(m => ({
+                    id: String((m && m.id) == null ? '' : m.id).trim(),
+                    name: (m && (m.zh || m.name)) || '',
+                }));
+                const ids = src.filter(m => __isWs(m.id)).map(m => m.id);
+                if (!ids.length) throw new Error('没有可校验的工坊 mod');
+                checkWsWebAlive(ids, arr => {
+                    const bad = [];
+                    const unknown = [];
+                    arr.forEach(r => {
+                        const m = src.find(x => x.id === r.id) || {};
+                        const limited = r.status === 429 || r.status === 'TIMEOUT' || String(r.status).indexOf('ERR') === 0;
+                        if (limited) { unknown.push({ id: r.id, name: m.name || '', status: r.status }); return; }
+                        if (!(r.status === 200 && !r.err)) bad.push({ id: r.id, name: m.name || '', status: r.status, title: r.title || '' });
+                    });
+                    send(res, 200, JSON.stringify({ ok: true, total: ids.length, checked: arr.length, bad: bad, unknown: unknown }));
+                });
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
     // 生成可发给别人的订阅链接（steam:// 协议 / 社区网页 / 订阅清单页面）
     if (url === '/api/steam/link' && req.method === 'POST') {
         let raw = '';
@@ -1160,14 +1249,25 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 const text = live.map(m => (m.zh || m.name || m.id) + '  ' + 'steam://subscribe/' + m.id).join('\n');
                 // 顺手把订阅清单页面写到导出文件夹，方便连文件一起发
                 let html = '';
+                let htmlOpen = '';
+                const ts = Date.now();
+                const genAt = new Date(ts).toLocaleString('zh-CN', { hour12: false });
                 try {
                     const folder = resolveShareFolder(b.folder);
                     fs.mkdirSync(folder, { recursive: true });
                     html = path.join(folder, 'subscribe.html');
-                    fs.writeFileSync(html, subHtmlFor(live), 'utf8');
-                } catch (e) { html = ''; }
+                    fs.writeFileSync(html, subHtmlFor(live, genAt), 'utf8');
+                    // 同名文件会被浏览器缓存，导致点开的还是旧的一版；另存一份带时间戳的副本专门用于打开
+                    htmlOpen = path.join(folder, 'subscribe-' + ts + '.html');
+                    fs.writeFileSync(htmlOpen, subHtmlFor(live, genAt), 'utf8');
+                    try {
+                        const olds = fs.readdirSync(folder).filter(f => /^subscribe-\d+\.html$/i.test(f)).sort();
+                        for (let i = 0; i < olds.length - 2; i++) fs.unlinkSync(path.join(folder, olds[i]));
+                    } catch (e) { }
+                } catch (e) { html = ''; htmlOpen = ''; }
                 send(res, 200, JSON.stringify({
                     ok: true, count: live.length, local: all.length - ws.length, dead: dead, unchecked: alive ? 0 : 1,
+                    ts: ts, genAt: genAt, htmlOpen: htmlOpen, liveIds: live.map(m => m.id),
                     steam: steam.join('\n'), steamAll: 'steam://subscribe/' + live.map(m => m.id).join(','),
                     web: web.join('\n'), text: text, html: html,
                 }));
