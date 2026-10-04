@@ -114,6 +114,7 @@ li.over{border-color:#6366f1}
   <button id="importZip">导入zip包</button>
   <input type="file" id="zipFile" accept=".zip" style="display:none">
   <button id="btnPresets">mod方案存档</button>
+  <button id="btnSaves">存档管理</button>
   <button id="tr">翻译名称（本地 AI）</button>
   <span class="sbox" id="sBox">
     <input id="search" placeholder="搜索 mod：名称 / 中文名 / 分类 / ID" spellcheck="false" autocomplete="off">
@@ -127,6 +128,7 @@ li.over{border-color:#6366f1}
 
 <div class="msg" id="msg"></div>
 <div class="report" id="subBox" style="display:none"></div>
+<div class="report" id="saveBox" style="display:none"></div>
 <div class="report" id="presetBox" style="display:none"></div>
 <div class="report" id="linkBox" style="display:none"></div>
 <div class="report" id="report"></div>
@@ -926,6 +928,88 @@ document.getElementById('btnSubLink').onclick = async () => {
         };
         document.getElementById('linkClose').onclick = () => { box.style.display = 'none'; };
     } catch (e) { box.style.display = 'none'; show('生成失败：' + e.message, false); }
+};
+
+// ---------- 存档管理 ----------
+function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+async function savesRefresh() {
+    const box = document.getElementById('saveBox');
+    let d = {};
+    try { const r = await fetch('/api/saves'); d = await r.json(); } catch (e) { box.innerHTML = '读取存档失败：' + e.message; box.style.display = 'block'; return; }
+    if (!d.ok) { box.innerHTML = '读取存档失败：' + esc(d.error); box.style.display = 'block'; return; }
+    const slots = (list, kind, title, dirHint) => {
+        const rows = (list || []).map(s => '<li><b>' + esc(s.name) + '</b> <span class="hint">'
+            + s.files.length + ' 个文件 · ' + fmtSize(s.size) + ' · ' + new Date(s.mtime).toLocaleString('zh-CN', { hour12: false })
+            + '</span> <button data-bk="' + kind + '|' + esc(s.name) + '">备份</button></li>').join('');
+        return '<div class="sev i">' + title + '（' + (list || []).length + ' 个）</div>' +
+            '<div class="hint">' + esc(dirHint) + '</div>' +
+            (rows ? ('<ul>' + rows + '</ul>') : '<div class="hint">没有找到存档</div>');
+    };
+    const bkRows = (d.backups || []).map(b => '<li><b>' + esc(b.name) + '</b> <span class="hint">'
+        + (b.kind === 'multi' ? '多人' : '单人') + ' · ' + new Date(b.ts.replace(/-/g, (mm, off) => off > 9 ? ':' : '-')).toLocaleString('zh-CN', { hour12: false }).replace(/^Invalid.*$/, esc(b.ts))
+        + ' · ' + b.count + ' 个文件 · ' + fmtSize(b.size) + '</span> '
+        + '<button data-rs="' + esc(b.id) + '">恢复</button> <button data-db="' + esc(b.id) + '">删除</button></li>').join('');
+    box.innerHTML = '<h3>存档管理</h3>' +
+        '<div>单人存档和多人存档是<b>分开</b>的两套：单人在存档根目录，多人在 Multiplayer 子目录。备份存在软件目录的 savebackups 里，恢复前会自动给当前存档再留一份。</div>' +
+        '<div class="pbtns">' +
+        '<button id="svOpenSingle">打开单人存档文件夹</button>' +
+        '<button id="svOpenMulti">打开多人存档文件夹</button>' +
+        '<button id="svOpenBk">打开备份文件夹</button>' +
+        '<button id="svClose">关闭</button>' +
+        '<span class="hint">游戏开着的时候别恢复存档，先退出游戏</span></div>' +
+        slots(d.single, 'single', '单人存档', d.dirSingle) +
+        slots(d.multi, 'multi', '多人存档', d.dirMulti) +
+        '<div class="sev i">备份记录（共 ' + (d.backups || []).length + ' 份）</div>' +
+        (bkRows ? ('<ul>' + bkRows + '</ul>') : '<div class="hint">还没有备份</div>');
+    box.style.display = 'block';
+    document.getElementById('svClose').onclick = () => { box.style.display = 'none'; };
+    const open = async (t) => { try { await fetch('/api/saves/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target: t }) }); } catch (e) { } };
+    document.getElementById('svOpenSingle').onclick = () => open('single');
+    document.getElementById('svOpenMulti').onclick = () => open('multi');
+    document.getElementById('svOpenBk').onclick = () => open('backup');
+    box.querySelectorAll('[data-bk]').forEach(btn => {
+        btn.onclick = async () => {
+            const [kind, name] = btn.dataset.bk.split('|');
+            try {
+                const r = await fetch('/api/saves/backup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, name }) });
+                const dd = await r.json();
+                show(dd.ok ? ('已备份「' + name + '」' + dd.count + ' 个文件') : ('备份失败：' + dd.error), !!dd.ok);
+                await savesRefresh();
+            } catch (e) { show('备份失败：' + e.message, false); }
+        };
+    });
+    box.querySelectorAll('[data-rs]').forEach(btn => {
+        btn.onclick = async () => {
+            if (!confirm('确定用这份备份覆盖当前存档吗？\n\n（恢复前会自动给当前存档再备份一份。请先退出游戏再操作）')) return;
+            try {
+                const r = await fetch('/api/saves/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: btn.dataset.rs }) });
+                const dd = await r.json();
+                show(dd.ok ? ('已恢复 ' + dd.restored + ' 个文件') : ('恢复失败：' + dd.error), !!dd.ok);
+                await savesRefresh();
+            } catch (e) { show('恢复失败：' + e.message, false); }
+        };
+    });
+    box.querySelectorAll('[data-db]').forEach(btn => {
+        btn.onclick = async () => {
+            if (!confirm('删除这份备份？（不会动游戏里的存档）')) return;
+            try {
+                const r = await fetch('/api/saves/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: btn.dataset.db }) });
+                const dd = await r.json();
+                show(dd.ok ? '已删除备份' : ('删除失败：' + dd.error), !!dd.ok);
+                await savesRefresh();
+            } catch (e) { show('删除失败：' + e.message, false); }
+        };
+    });
+}
+document.getElementById('btnSaves').onclick = async () => {
+    const box = document.getElementById('saveBox');
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+    document.getElementById('presetBox').style.display = 'none';
+    await savesRefresh();
 };
 
 document.getElementById('btnPresets').onclick = async () => {

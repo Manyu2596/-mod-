@@ -846,6 +846,161 @@ const server = http.createServer((req, res) => {
     }
 
     // 重新检测路径（刚装好游戏 / 改了 Steam 库位置时用）
+    // ---------- 存档管理 ----------
+    // 单人存档在游戏存档根目录（*.save），多人存档在 Multiplayer 子目录里；
+    // 一个存档槽 = <名字>.save + 可选的 <名字>_CharacterData.xml
+    const BACKUP_ROOT = path.join(__dirname, 'savebackups');
+
+    function saveDirs() {
+        const inst = getPaths().INSTALLED;
+        const root = inst ? path.resolve(inst, '..', '..') : '';
+        return { root, single: root, multi: root ? path.join(root, 'Multiplayer') : '' };
+    }
+    function listSaves(dir) {
+        const map = {};
+        if (!dir || !fs.existsSync(dir)) return [];
+        const all = fs.readdirSync(dir);
+        const files = all.filter(f => f[0] !== '.' && fs.statSync(path.join(dir, f)).isFile());
+        files.filter(f => /\.save$/i.test(f)).forEach(f => {
+            const n = f.slice(0, -5);
+            const st = fs.statSync(path.join(dir, f));
+            map[n] = { name: n, files: [f], size: st.size, mtime: st.mtime.getTime() };
+        });
+        files.forEach(f => {
+            Object.keys(map).forEach(n => {
+                if (f.indexOf(n + '_') === 0 && /\.(xml|xml\.bk\d*)$/i.test(f)) {
+                    const st = fs.statSync(path.join(dir, f));
+                    map[n].files.push(f);
+                    map[n].size += st.size;
+                    map[n].mtime = Math.max(map[n].mtime, st.mtime.getTime());
+                }
+            });
+        });
+        return Object.keys(map).map(k => map[k]).sort((a, b) => b.mtime - a.mtime);
+    }
+    function safeBackupPath(id) {
+        const p = path.resolve(BACKUP_ROOT, String(id || '').replace(/^[/\\]+/, ''));
+        if (p !== BACKUP_ROOT && !p.startsWith(BACKUP_ROOT + path.sep)) return '';
+        return p;
+    }
+    function walkBackups() {
+        const out = [];
+        if (!fs.existsSync(BACKUP_ROOT)) return out;
+        ['single', 'multi'].forEach(kind => {
+            const kd = path.join(BACKUP_ROOT, kind);
+            if (!fs.existsSync(kd)) return;
+            fs.readdirSync(kd).forEach(slot => {
+                const sd = path.join(kd, slot);
+                if (!fs.statSync(sd).isDirectory()) return;
+                fs.readdirSync(sd).forEach(ts => {
+                    const td = path.join(sd, ts);
+                    if (!fs.statSync(td).isDirectory()) return;
+                    let size = 0, count = 0;
+                    fs.readdirSync(td).forEach(f => {
+                        const st = fs.statSync(path.join(td, f));
+                        size += st.size; count++;
+                    });
+                    out.push({ id: kind + '/' + slot + '/' + ts, kind, name: slot, ts, size, count });
+                });
+            });
+        });
+        return out.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+    }
+
+    if (url === '/api/saves') {
+        try {
+            const D = saveDirs();
+            send(res, 200, JSON.stringify({
+                ok: true, dirSingle: D.single, dirMulti: D.multi,
+                single: listSaves(D.single), multi: listSaves(D.multi),
+                backups: walkBackups(), backupRoot: BACKUP_ROOT,
+            }));
+        } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        return;
+    }
+    if (url === '/api/saves/backup' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const D = saveDirs();
+                const dir = b.kind === 'multi' ? D.multi : D.single;
+                if (!dir || !fs.existsSync(dir)) throw new Error('找不到存档目录');
+                const slot = listSaves(dir).find(x => x.name === b.name);
+                if (!slot) throw new Error('没找到这个存档：' + b.name);
+                const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+                const dest = path.join(BACKUP_ROOT, b.kind === 'multi' ? 'multi' : 'single', b.name, stamp);
+                fs.mkdirSync(dest, { recursive: true });
+                slot.files.forEach(f => fs.copyFileSync(path.join(dir, f), path.join(dest, f)));
+                send(res, 200, JSON.stringify({ ok: true, dest, count: slot.files.length }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+    if (url === '/api/saves/restore' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const src = safeBackupPath(b.id);
+                if (!src || !fs.existsSync(src)) throw new Error('备份不存在');
+                const parts = String(b.id).split('/');
+                const kind = parts[0], slotName = parts[1];
+                const D = saveDirs();
+                const dir = kind === 'multi' ? D.multi : D.single;
+                if (!dir || !fs.existsSync(dir)) throw new Error('找不到存档目录');
+                // 恢复前先把当前状态另存一份，避免覆盖后回不去
+                const cur = listSaves(dir).find(x => x.name === slotName);
+                if (cur) {
+                    const stamp = ('__自动备份_' + new Date().toISOString()).replace(/[:T]/g, '-').slice(0, 40);
+                    const dest = path.join(BACKUP_ROOT, kind, slotName, stamp);
+                    fs.mkdirSync(dest, { recursive: true });
+                    cur.files.forEach(f => fs.copyFileSync(path.join(dir, f), path.join(dest, f)));
+                }
+                let n = 0;
+                fs.readdirSync(src).forEach(f => {
+                    fs.copyFileSync(path.join(src, f), path.join(dir, f));
+                    n++;
+                });
+                send(res, 200, JSON.stringify({ ok: true, restored: n }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+    if (url === '/api/saves/delete' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const p = safeBackupPath(b.id);
+                if (!p || !fs.existsSync(p)) throw new Error('备份不存在');
+                fs.rmSync(p, { recursive: true, force: true });
+                send(res, 200, JSON.stringify({ ok: true }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+    if (url === '/api/saves/open' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const D = saveDirs();
+                let dir = BACKUP_ROOT;
+                if (b.target === 'single') dir = D.single;
+                else if (b.target === 'multi') dir = D.multi;
+                else fs.mkdirSync(BACKUP_ROOT, { recursive: true });
+                if (dir && fs.existsSync(dir)) exec('explorer "' + dir + '"', () => { });
+                send(res, 200, JSON.stringify({ ok: true }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
     // 联机自检：游戏联机时用的是 Installed 目录（不是工坊下载目录），
     // mod 没同步过去、或两边版本不一致，加入别人游戏就会被要求重新下载
     if (url === '/api/joincheck') {
