@@ -35,6 +35,8 @@ li.over{border-color:#6366f1}
 .tog{flex-shrink:0;padding:4px 10px;font-size:11.5px}
 .tr2{background:#1c2c3a;color:#7dd3fc}
 .tagd{background:#4a1a1e;color:#f87171;font-size:10.5px;padding:1px 6px;border-radius:8px}
+.tagw{background:#4a3a12;color:#fbbf24;font-size:10.5px;padding:1px 6px;border-radius:8px}
+.filldep{background:#3f2d10;color:#fbbf24}
 .msg{padding:9px 13px;border-radius:8px;font-size:12.5px;margin-bottom:12px;display:none}
 .msg.ok{background:#12261c;border-left:3px solid #4ade80;display:block}
 .msg.err{background:#2a1618;border-left:3px solid #f87171;display:block}
@@ -211,18 +213,30 @@ function makeItem(m, i, isActive){
     li.draggable = true;
     li.dataset.id = m.id;
     const danger = /csforbarotrauma/i.test(m.name) && !/luacs/i.test(m.name);
+    const miss = isActive ? missingDeps(m) : [];
     const zhHtml = m.zh ? '<span class="cn">' + esc(m.zh) + '</span> ' : '';
     li.innerHTML =
         '<span class="grip">≡</span>' +
         '<span class="idx">' + (i + 1) + '</span>' +
         '<div class="info"><div class="nm">' + zhHtml + esc(m.name) +
         (danger ? ' <span class="tagd">旧框架·建议停用</span>' : '') +
+        (miss.length ? ' <span class="tagw" title="' + esc(miss.map(x => x.why).join('；')) + '">缺前置：' + esc(miss.map(x => x.name).join('、')) + '</span>' : '') +
         '</div><div class="meta">' + esc(m.cat) + ' · v' + m.modversion + '</div>' +
         (m.desc ? '<div class="dsc" title="' + esc(m.desc) + '">' + esc(m.desc) + '</div>' : '') +
         '</div>' +
         '<a class="go" href="' + (m.workshop || '#') + '" target="_blank" rel="noopener">创意工坊 ↗</a>' +
         '<button class="tog tr2" title="手动补充/修改中文名与简介">译</button>' +
+        (miss.length ? '<button class="tog filldep">补前置</button>' : '') +
         '<button class="tog tgs">' + (isActive ? '停用' : '启用') + '</button>';
+
+    const fdep = li.querySelector('.filldep');
+    if (fdep) fdep.onclick = () => {
+        const names = miss.map(x => x.name).join('、');
+        if (!confirm('「' + (m.zh || m.name) + '」需要前置：' + names + '\n\n要一起启用吗？（会放到它前面）')) return;
+        const added = fillDepsFor(m);
+        render();
+        show(added.length ? ('已补启用前置：' + added.join('、')) : '没找到可补的前置（可能不在本机的 mod 库里）', !!added.length);
+    };
 
     li.querySelector('.tgs').onclick = () => {
         if (isActive) {
@@ -230,7 +244,16 @@ function makeItem(m, i, isActive){
             idle.push(active.splice(k, 1)[0]);
         } else {
             const k = idle.findIndex(x => x.id === m.id);
-            active.push(idle.splice(k, 1)[0]);
+            const mod = idle.splice(k, 1)[0];
+            active.push(mod);
+            // 启用时顺带检查前置，缺了就提示并询问是否补上
+            const need = missingDeps(mod);
+            if (need.length && confirm('「' + (mod.zh || mod.name) + '」可能需要前置：' + need.map(x => x.name).join('、') + '\n\n（' + need.map(x => x.why).join('；') + '）\n\n要一起启用吗？')) {
+                const added = fillDepsFor(mod);
+                render();
+                show(added.length ? ('已启用，并补上前置：' + added.join('、')) : '已启用（前置不在本机 mod 库里，需要自己订阅）', true);
+                return;
+            }
         }
         render();
     };
@@ -283,6 +306,26 @@ function matchMod(m, ts){
     const hay = [m.name, m.zh, m.cat, m.desc, m.id, m.modversion]
         .filter(Boolean).join(' ').toLowerCase();
     return ts.every(w => hay.indexOf(w) >= 0);
+}
+
+// 找出某 mod 声明的前置里，还没启用、且本机 mod 库里有的那些
+function missingDeps(m) {
+    const need = (m.deps || []).filter(d => !active.some(x => x.name === d.name || x.id === d.id));
+    return need.filter(d => active.some(x => x.id === d.id) === false && (idle.some(x => x.id === d.id) || active.some(x => x.id === d.id)));
+}
+// 把缺的前置从右栏挪到左栏，插到该 mod 前面（前置必须先加载）
+function fillDepsFor(m) {
+    const added = [];
+    const need = missingDeps(m);
+    need.forEach(d => {
+        const k = idle.findIndex(x => x.id === d.id);
+        if (k < 0) return;
+        const dep = idle.splice(k, 1)[0];
+        const at = active.findIndex(x => x.id === m.id);
+        active.splice(at < 0 ? active.length : at, 0, dep);
+        added.push(dep.zh || dep.name);
+    });
+    return added;
 }
 
 function render(){

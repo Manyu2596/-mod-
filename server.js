@@ -244,6 +244,8 @@ function buildData() {
     scanOne(W);     // Steam 创意工坊
     scanOne(LM);    // 游戏目录里的 LocalMods（非 Steam 版 / 手动放的 mod）
 
+    fillDeps(mods); // 推断每个 mod 的前置依赖（框架 / 系列本体）
+
     // 已启用的按当前配置顺序，未启用的按推荐顺序
     const active = pkgs
         .map(p => mods.find(m => m.id === p.id))
@@ -361,6 +363,39 @@ function launchGame() {
     } catch (e) {
         return false;
     }
+}
+
+// ---------- 前置依赖推断 ----------
+// Steam 工坊的「必需物品」字段绝大多数作者不填，所以这里从 mod 自身内容与命名推断：
+//  1) 脚本框架：带 Lua/C# 的 mod 需要 LuaCsForBarotrauma
+//  2) 系列本体：名字里带「补丁/扩展/汉化/兼容」的 mod，需要同系列的那个本体 mod
+function fillDeps(mods) {
+    const norm = (s) => __normName(String(s || ''));
+    const isFrame = (m) => /luacs|^csforbarotrauma/i.test(m.name || '');
+    const kwAddon = /(补丁|patch|扩展|拓展|expansion|extra|add-?on|汉化|简体|中文|chinese|兼容|compat)/i;
+    const luaFrame = mods.find(m => /^luacsforbarotrauma/i.test(m.name || ''));
+    mods.forEach(m => {
+        const deps = [];
+        const nm = norm(m.name);
+        const isAddon = kwAddon.test(m.name || '') || kwAddon.test(m.zh || '');
+        // 1) 脚本框架
+        if (luaFrame && luaFrame.id !== m.id && !isFrame(m) && (m.hasLua || m.hasCs)) {
+            deps.push({ id: luaFrame.id, name: luaFrame.name, why: 'Lua/C# 脚本需要框架' });
+        }
+        // 2) 系列本体：本 mod 名字以某个非补丁类 mod 的名字开头
+        if (isAddon) {
+            const base = mods
+                .filter(x => x.id !== m.id && !isFrame(x) && !kwAddon.test(x.name || ''))
+                .map(x => ({ m: x, n: norm(x.name) }))
+                .filter(x => x.n.length >= 4 && nm.indexOf(x.n) === 0)
+                .sort((a, b) => b.n.length - a.n.length)[0];
+            if (base) deps.push({ id: base.m.id, name: base.m.name, why: '扩展/补丁需要本体' });
+        }
+        // 去重
+        const seen = new Set();
+        m.deps = deps.filter(d => !seen.has(d.id) && seen.add(d.id));
+        m.depsNames = m.deps.map(d => d.name);
+    });
 }
 
 // ---------- mod 更新检测（离线：对比本机会话的版本快照）----------
