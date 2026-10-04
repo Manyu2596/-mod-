@@ -846,6 +846,39 @@ const server = http.createServer((req, res) => {
     }
 
     // 重新检测路径（刚装好游戏 / 改了 Steam 库位置时用）
+    // 联机自检：游戏联机时用的是 Installed 目录（不是工坊下载目录），
+    // mod 没同步过去、或两边版本不一致，加入别人游戏就会被要求重新下载
+    if (url === '/api/joincheck') {
+        try { send(res, 200, JSON.stringify(Object.assign({ ok: true }, joinCheck()))); }
+        catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        return;
+    }
+    function joinCheck() {
+        const P = getPaths();
+        const W = P.WORKSHOP || '', I = P.INSTALLED || '', LM = P.LOCALMODS || '';
+        const data = buildData();
+        const readV = (p) => {
+            try { const t = fs.readFileSync(p, 'utf8'); return (/modversion="([^"]*)"/i.exec(t) || [, '-'])[1]; }
+            catch (e) { return '-'; }
+        };
+        const problems = [];
+        (data.active || []).forEach(m => {
+            const id = String(m.id);
+            const inW = W ? fs.existsSync(path.join(W, id, 'filelist.xml')) : false;
+            const inL = LM ? fs.existsSync(path.join(LM, id, 'filelist.xml')) : false;
+            const inI = I ? fs.existsSync(path.join(I, id, 'filelist.xml')) : false;
+            const nm = m.zh || m.name;
+            if (!inW && !inL) { problems.push({ id, name: nm, kind: 'missing', why: '本机没有这个 mod 的文件（Steam 还没下载完，或被取消订阅）' }); return; }
+            if (!inI) { problems.push({ id, name: nm, kind: 'notinstalled', why: '还没同步到游戏加载目录，启动一次单人游戏才会复制过去' }); return; }
+            if (inW) {
+                const vw = readV(path.join(W, id, 'filelist.xml'));
+                const vi = readV(path.join(I, id, 'filelist.xml'));
+                if (vw !== vi) problems.push({ id, name: nm, kind: 'stale', why: '游戏加载目录是 v' + vi + '，工坊最新是 v' + vw + '，联机会被要求重新下载' });
+            }
+        });
+        return { total: (data.active || []).length, problems };
+    }
+
     if (url === '/api/paths/rescan' && req.method === 'POST') {
         try {
             const P = refreshPaths();

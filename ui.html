@@ -103,6 +103,7 @@ li.over{border-color:#6366f1}
   <button class="primary" id="save">保存到游戏</button>
   <button id="resort">重新排序</button>
   <button id="test">启动游戏</button>
+  <button id="joinCheck">联机自检</button>
   <button id="reload">扫描路径</button>
   <button id="updates">检查更新</button>
   <button id="paths">路径设置</button>
@@ -418,6 +419,25 @@ document.getElementById('enableAll').onclick = async () => {
         if (d.ok) show('已启用全部 mod 并写入游戏配置（新启用的排在列表末尾，可拖动调整顺序）', true);
         else show('启用失败：' + d.error, false);
     } catch (e) { show('启用失败：' + e.message, false); }
+    btn.disabled = false; btn.textContent = old;
+};
+
+// 联机自检：检查启用的 mod 是否真的能被联机加载（工坊副本 → 游戏加载目录）
+document.getElementById('joinCheck').onclick = async () => {
+    const btn = document.getElementById('joinCheck');
+    btn.disabled = true; const old = btn.textContent; btn.textContent = '检查中...';
+    try {
+        const r = await fetch('/api/joincheck');
+        const d = await r.json();
+        if (!d.ok) { show('检查失败：' + d.error, false); return; }
+        if (!d.problems.length) {
+            show('联机自检通过：' + d.total + ' 个启用 mod 都已在游戏加载目录、版本与工坊一致，加入别人游戏不会再要求重新下载', true);
+            return;
+        }
+        const txt = d.problems.map((p, i) => (i + 1) + '. ' + p.name + ' — ' + p.why).join('\n');
+        alert('发现 ' + d.problems.length + ' 个可能导致联机时要求重新下载的问题：\n\n' + txt);
+        show('发现 ' + d.problems.length + ' 个问题（明细见弹窗）：建议先处理再联机', false);
+    } catch (e) { show('检查失败：' + e.message, false); }
     btn.disabled = false; btn.textContent = old;
 };
 
