@@ -1289,12 +1289,18 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 }
                 const useWeb = b.mode === 'web';
                 if (!ids.length) throw new Error('没有可订阅的创意工坊 mod（本地 mod 无法订阅）');
-                if (ids.length > 30) throw new Error('一次最多订阅 30 个，当前 ' + ids.length + ' 个');
+                // 分批慢发：连着几十条打给 Steam 会被限流，之后社区页会变成各种报错页（包括「该物品不存在」）
+                const SIZE = 8, GAP = 800, CHUNK_GAP = 6000;
                 ids.forEach((id, i) => {
                     const u = useWeb ? ('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id) : ('steam://subscribe/' + id);
-                    setTimeout(() => { try { exec('cmd /c start "" "' + u + '"'); } catch (e) { /* 忽略 */ } }, i * 400);
+                    const wait = (i % SIZE) * GAP + Math.floor(i / SIZE) * CHUNK_GAP;
+                    setTimeout(() => { try { exec('cmd /c start "" "' + u + '"'); } catch (e) { /* 忽略 */ } }, wait);
                 });
-                send(res, 200, JSON.stringify({ ok: true, count: ids.length, mode: useWeb ? 'web' : 'steam' }));
+                const chunks = Math.ceil(ids.length / SIZE);
+                send(res, 200, JSON.stringify({
+                    ok: true, count: ids.length, mode: useWeb ? 'web' : 'steam', chunks: chunks,
+                    seconds: Math.round((((ids.length % SIZE) || SIZE) - 1) * GAP / 1000 + (chunks - 1) * CHUNK_GAP / 1000),
+                }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
         return;

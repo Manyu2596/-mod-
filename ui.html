@@ -740,6 +740,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             '<button id="linkClose">关闭</button>' +
             '</div>' +
             '<div class="hint" style="margin-top:6px">Steam 的协议一次只确认一个 mod；想让对方「一次订阅全部」，用「做 Steam 合集」——把 mod 加进合集后分享合集链接，对方点「订阅全部」即可。</div>' +
+            '<div class="hint">若对方打开链接看到「该物品不存在」：多半是短时间点了太多条被 Steam 限流（表现为各种报错页），隔 5~10 分钟再点就正常；社区网页访问不畅时也可以直接发导出文件，不依赖 Steam。</div>' +
             (d.html ? '<div class="hint">订阅清单页面：' + d.html + '</div>' : '');
         const ta = document.getElementById('linkText');
         const modes = { steam: d.steam, web: d.web, name: d.text };
@@ -758,7 +759,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             if (!ids.length) { show('没有可订阅的工坊 mod', false); return; }
             const rr = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: ids, mode: 'steam' }) });
             const dd = await rr.json();
-            show(dd.ok ? ('已拉起 Steam，请在弹出的窗口里确认订阅（共 ' + dd.count + ' 个）') : ('订阅失败：' + dd.error), !!dd.ok);
+            show(dd.ok ? ('已拉起 Steam：共 ' + dd.count + ' 个，分 ' + (dd.chunks || 1) + ' 批慢慢弹（约 ' + (dd.seconds || 0) + ' 秒弹完），请在弹出的窗口里逐个确认。别急着连点，点太快会被 Steam 限流，之后页面会变成各种报错页') : ('订阅失败：' + dd.error), !!dd.ok);
         };
         document.getElementById('linkHtml').onclick = async () => {
             const target = d.htmlOpen || d.html || '';
