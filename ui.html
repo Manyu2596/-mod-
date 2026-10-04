@@ -735,7 +735,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             '<button id="linkCopy" class="primary">复制</button>' +
             '<button id="linkSteamAll">自己先订阅一遍</button>' +
             '<button id="linkHtml">打开订阅清单页面</button>' +
-            '<button id="linkColl">做 Steam 合集（一次订阅全部）</button>' +
+            '<button id="linkColl">做 Steam 合集（脚本一键加满）</button>' +
             '<button id="linkVerify">校验链接</button>' +
             '<button id="linkClose">关闭</button>' +
             '</div>' +
@@ -783,9 +783,39 @@ document.getElementById('btnSubLink').onclick = async () => {
             } catch (e) { show('校验失败：' + e.message, false); }
             vb.disabled = false; vb.textContent = '校验链接';
         };
-        document.getElementById('linkColl').onclick = () => {
+        document.getElementById('linkColl').onclick = async () => {
+            // Steam 只有「合集」能让对方一次订阅全部；用合集页自己的登录态调用官方 addchild 接口批量加，省得手动一个个搜
+            const ids = d.liveIds || [];
+            const collScript = [
+                '(function(){',
+                '  var IDS = [' + ids.join(',') + '];',
+                '  var cid = new URL(location.href).searchParams.get("id");',
+                '  if (!cid) { console.log("%c请先进到合集的「添加/编辑子项」页面再运行（网址里要有 id=xxxx）", "color:#f66;font-size:14px"); return; }',
+                '  if (!window.g_sessionID) { console.log("%c这个页面没读到登录态，请确认已在本页登录 Steam", "color:#f66;font-size:14px"); return; }',
+                '  var ok = 0, fail = [], i = 0;',
+                '  function next(){',
+                '    if (i >= IDS.length) {',
+                '      console.log("%c完成：成功 " + ok + " 个，失败 " + fail.length + " 个", "color:#0f0;font-size:16px");',
+                '      if (fail.length) console.log("失败的 ID：" + fail.join(","));',
+                '      setTimeout(function(){ location.reload(); }, 2000); return;',
+                '    }',
+                '    var id = IDS[i++];',
+                '    var fd = new URLSearchParams();',
+                '    fd.set("id", cid); fd.set("sessionid", window.g_sessionID); fd.set("childid", String(id)); fd.set("activeSection", "None");',
+                '    fetch("https://steamcommunity.com/sharedfiles/addchild", {method:"POST", credentials:"include", body: fd})',
+                '      .then(function(r){ return r.json(); })',
+                '      .then(function(j){ if (j && j.success == 1) ok++; else fail.push(id); })',
+                '      .catch(function(){ fail.push(id); })',
+                '      .then(function(){ console.log((ok + fail.length) + "/" + IDS.length + " ..."); setTimeout(next, 400); });',
+                '  }',
+                '  next();',
+                '})();'
+            ].join('\n');
+            ta.value = collScript;
+            ta.select();
+            try { await navigator.clipboard.writeText(collScript); } catch (e) { try { document.execCommand('copy'); } catch (e2) { } }
             window.open('https://steamcommunity.com/workshop/managecollection/?appid=602960', '_blank');
-            show('已打开 Steam 合集创建页：新建合集 → 把上面这些 mod 加进去 → 分享合集链接，对方点「订阅全部」即可', true);
+            show('已打开 Steam 合集页，并把「一键加满」脚本复制好了（文本框里也有，可手动复制）。步骤：新建/编辑一个合集 → 进入「添加/编辑子项」页 → F12 打开控制台 → 粘贴后回车 → 自动把这 ' + ids.length + ' 个 mod 加进合集 → 刷新确认后发布，把合集链接发给朋友，对方点「订阅全部」即可', true);
         };
         document.getElementById('linkClose').onclick = () => { box.style.display = 'none'; };
     } catch (e) { box.style.display = 'none'; show('生成失败：' + e.message, false); }
