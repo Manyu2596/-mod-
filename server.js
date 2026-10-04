@@ -1096,7 +1096,8 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     }
     // 用 Steam 客户端或网页订阅创意工坊 mod（导入时缺的、或别人给的清单里的）
     // 生成订阅清单页面：一条链接对应一个 mod，另有一个「一键订阅全部」按钮
-    // 网页端订阅脚本：完全不用 steam:// 协议，纯 AJAX（有些机器 steam:// 拉不动 Steam 时的兜底）
+    // 网页端订阅脚本：完全不用 steam:// 协议，纯 AJAX。注意接口是 /sharedfiles/subscribe（不带尾斜杠，带斜杠会 401）；
+    // 优先用页面自带的 jQuery（与 Steam 官方订阅按钮同款通道），没有 jQuery 才用 fetch。
     function webSubScript(ids) {
         return [
             "(function(){",
@@ -1106,13 +1107,19 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             "  function next(){",
             "    if (i >= IDS.length) { console.log(\"%c完成：订阅成功 \" + ok + \" 个，失败 \" + fail.length + \" 个\", \"color:#0f0;font-size:16px\"); if (fail.length) console.log(\"失败 ID：\" + fail.join(\",\")); return; }",
             "    var id = IDS[i++];",
-            "    var fd = new URLSearchParams();",
-            "    fd.set(\"id\", id); fd.set(\"sessionid\", window.g_sessionID);",
-            "    fetch(\"https://steamcommunity.com/sharedfiles/subscribe/\", {method:\"POST\", credentials:\"include\", body: fd})",
-            "      .then(function(r){ return r.json(); })",
-            "      .then(function(j){ if (j && j.success == 1) ok++; else fail.push(id); })",
-            "      .catch(function(){ fail.push(id); })",
-            "      .then(function(){ console.log((ok + fail.length) + \"/\" + IDS.length + \" ...\"); setTimeout(next, 600); });",
+            "    var done = function (j) { if (j && (j.success == 1 || j.success == \"1\")) ok++; else fail.push(id); };",
+            "    var step = function () { console.log((ok + fail.length) + \"/\" + IDS.length + \" ...\"); setTimeout(next, 600); };",
+            "    if (window.jQuery) {",
+            "      jQuery.post(\"/sharedfiles/subscribe\", { id: id, sessionid: window.g_sessionID })",
+            "        .done(function (j) { done(j); })",
+            "        .fail(function () { fail.push(id); })",
+            "        .always(step);",
+            "    } else {",
+            "      fetch(\"/sharedfiles/subscribe\", { method: \"POST\", credentials: \"include\", body: new URLSearchParams({ id: id, sessionid: window.g_sessionID }) })",
+            "        .then(function (r) { return r.json(); })",
+            "        .then(function (j) { done(j); }, function () { fail.push(id); })",
+            "        .then(step);",
+            "    }",
             "  }",
             "  next();",
             "})();"
