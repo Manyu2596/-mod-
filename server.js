@@ -1109,6 +1109,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             '<p><input id="one" readonly value="' + one + '"></p>' +
             '<ol>' + items + '</ol>' +
             '<p>点「Steam 订阅」会拉起 Steam 客户端并弹出订阅确认；也可以点「网页打开」在社区页手动点「+ 订阅」。</p>' +
+            '<p style="color:#9ca3af;font-size:12px">第一次点「Steam 订阅」时，浏览器会弹「此站点正在尝试打开 Steam」——点「打开」即可，并可勾选「始终允许」，之后就不会再问；点了没反应的话，确认 Steam 已启动并已登录。</p>' +
             '<p style="color:#9ca3af;font-size:12px">若打开后提示「该物品不存在」：先确认浏览器里已登录 Steam；短时间内点太多条也会被 Steam 限流，隔一会儿再点即可。</p>' +
             '<script>var ids=' + JSON.stringify(ids) + ';' +
             'document.getElementById("all").onclick=function(){ids.forEach(function(id,i){setTimeout(function(){location.href="steam://subscribe/"+id;},i*1200);});};' +
