@@ -763,7 +763,10 @@ const server = http.createServer((req, res) => {
                 const enabledNames = new Set(enabledMods.map(m => m.name));
                 const missingDeps = [];
                 enabledMods.forEach(m => {
-                    (m.deps || []).forEach(dep => {
+                    const depNames = (m.depsNames && m.depsNames.length)
+                        ? m.depsNames
+                        : (m.deps || []).map(d => (d && d.name) || d);
+                    depNames.forEach(dep => {
                         if (!enabledNames.has(dep)) {
                             missingDeps.push({ mod: m.zh || m.name, dep });
                         }
