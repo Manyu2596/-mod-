@@ -1110,7 +1110,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             "    var done = function (j) { if (j && (j.success == 1 || j.success == \"1\")) ok++; else fail.push(id); };",
             "    var step = function () { console.log((ok + fail.length) + \"/\" + IDS.length + \" ...\"); setTimeout(next, 600); };",
             "    if (window.jQuery) {",
-            "      jQuery.post(\"/sharedfiles/subscribe\", { id: id, sessionid: window.g_sessionID })",
+            "      jQuery.ajax({ url: \"/sharedfiles/subscribe\", method: \"POST\", headers: { \"X-Requested-With\": \"XMLHttpRequest\" }, data: { id: id, sessionid: window.g_sessionID, appid: 602960 } })",
             "        .done(function (j) { done(j); })",
             "        .fail(function () { fail.push(id); })",
             "        .always(step);",
