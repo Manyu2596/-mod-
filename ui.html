@@ -738,6 +738,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             '<button id="linkColl">做 Steam 合集（脚本一键加满）</button>' +
             '<button id="linkVerify">校验链接</button>' +
             '<button id="linkTest">测试能否拉起 Steam</button>' +
+            '<button id="linkWebSub">网页订阅脚本</button>' +
             '<button id="linkClose">关闭</button>' +
             '</div>' +
             '<div class="hint" style="margin-top:6px">Steam 的协议一次只确认一个 mod；想让对方「一次订阅全部」，用「做 Steam 合集」——把 mod 加进合集后分享合集链接，对方点「订阅全部」即可。</div>' +
@@ -780,6 +781,20 @@ document.getElementById('btnSubLink').onclick = async () => {
                     : ('失败：' + dd.error), !!dd.ok);
             } catch (e) { show('失败：' + e.message, false); }
             tb.disabled = false; tb.textContent = '测试能否拉起 Steam';
+        };
+        document.getElementById('linkWebSub').onclick = async () => {
+            const wb = document.getElementById('linkWebSub');
+            wb.disabled = true; wb.textContent = '生成中...';
+            try {
+                const rr = await fetch('/api/steam/websub-script', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ list: list }) });
+                const dd = await rr.json();
+                if (!dd.ok) { show('生成失败：' + dd.error, false); return; }
+                ta.value = dd.script;
+                ta.select();
+                try { await navigator.clipboard.writeText(dd.script); } catch (e) { try { document.execCommand('copy'); } catch (e2) { } }
+                show('脚本已复制到剪贴板（文本框里也有）。用法：在任何已登录 Steam 的 steamcommunity.com 页面按 F12 → Console → 粘贴回车 → 自动订阅全部 ' + dd.count + ' 个 mod，完全不用 steam:// 协议', true);
+            } catch (e) { show('生成失败：' + e.message, false); }
+            wb.disabled = false; wb.textContent = '网页订阅脚本';
         };
         document.getElementById('linkVerify').onclick = async () => {
             const vb = document.getElementById('linkVerify');
