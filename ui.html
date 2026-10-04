@@ -764,10 +764,9 @@ document.getElementById('btnSubLink').onclick = async () => {
             show(dd.ok ? ('已拉起 Steam：共 ' + dd.count + ' 个，分 ' + (dd.chunks || 1) + ' 批慢慢弹（约 ' + (dd.seconds || 0) + ' 秒弹完），请在弹出的窗口里逐个确认。别急着连点，点太快会被 Steam 限流，之后页面会变成各种报错页') : ('订阅失败：' + dd.error), !!dd.ok);
         };
         document.getElementById('linkHtml').onclick = async () => {
-            const target = d.htmlOpen || d.html || '';
-            if (!target) { show('订阅清单页面没生成成功', false); return; }
-            await fetch('/api/share/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: (document.getElementById('pShare') || {}).value || '', select: target, browser: true }) });
-            show('已用浏览器打开刚生成的订阅清单页面（文件名带时间戳，不会是旧的一版）', true);
+            if (d.dead && d.dead.length) show('有 ' + d.dead.length + ' 个 mod 已从创意工坊失效，未列入清单', false);
+            window.open('/subscribe?ts=' + (d.ts || Date.now()), '_blank');
+            show('已用 http 方式打开订阅清单（file:// 打开会被浏览器拦截 steam:// 按钮，所以改成走本机服务）。导出文件夹里也有 subscribe.html，可以发给别人（对方建议用里面的「网页一键订阅脚本」）', true);
         };
         document.getElementById('linkTest').onclick = async () => {
             const tb = document.getElementById('linkTest');

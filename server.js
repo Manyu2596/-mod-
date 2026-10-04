@@ -350,6 +350,9 @@ function send(res, code, body, type) {
     res.end(body);
 }
 
+// 最近一次生成的订阅清单 HTML（供 GET /subscribe 以 http 方式打开；file:// 页面里的 steam:// 会被浏览器静默拦截）
+let LAST_SUB_HTML = '';
+
 // 通过 Steam 启动游戏（本地服务，仅在本机生效）
 function launchGame() {
     try {
@@ -1138,7 +1141,9 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             '<p>点「Steam 订阅」会拉起 Steam 客户端并弹出订阅确认；也可以点「网页打开」在社区页手动点「+ 订阅」。</p>' +
             '<p style="color:#9ca3af;font-size:12px">第一次点「Steam 订阅」时，浏览器会弹「此站点正在尝试打开 Steam」——点「打开」即可，并可勾选「始终允许」，之后就不会再问；点了没反应的话，确认 Steam 已启动并已登录。</p>' +
             '<p style="color:#9ca3af;font-size:12px">若打开后提示「该物品不存在」：先确认浏览器里已登录 Steam；短时间内点太多条也会被 Steam 限流，隔一会儿再点即可。</p>' +
+            '<div id="filewarn" style="display:none;background:#78350f;color:#fde68a;border:1px solid #b45309;border-radius:8px;padding:10px 14px;margin:10px 0;font-size:13px">你正在用「本地文件」方式打开本页（地址栏是 file:///D:/... 开头）。这种页面里的 steam:// 链接会被浏览器<b>静默拦截</b>——点「Steam 订阅」「一键订阅全部」都会毫无反应。请回到工具面板重新点「订阅链接」（会用 http 方式打开），或直接用上面的「网页一键订阅脚本」。</div>' +
             '<script>var ids=' + JSON.stringify(ids) + ';' +
+            'if (location.protocol === "file:") { var fw = document.getElementById("filewarn"); if (fw) fw.style.display = "block"; }' +
             'document.getElementById("all").onclick=function(){ids.forEach(function(id,i){setTimeout(function(){location.href="steam://subscribe/"+id;},i*1200);});};' +
             'var o=document.getElementById("one");o.onclick=function(){o.select();};' +
             '</script></body></html>';
@@ -1264,6 +1269,16 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     }
 
     // 生成可发给别人的订阅链接（steam:// 协议 / 社区网页 / 订阅清单页面）
+    // 订阅清单用 http 方式打开：file:// 页面里的 steam:// 链接会被浏览器静默拦截（点了毫无反应）
+    if (url === '/subscribe') {
+        if (!LAST_SUB_HTML) {
+            send(res, 404, '<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;background:#111827;color:#e5e7eb;padding:24px"><p>还没有生成订阅清单。请回到工具面板点一次「订阅链接」。</p>', 'text/html; charset=utf-8');
+            return;
+        }
+        send(res, 200, LAST_SUB_HTML, 'text/html; charset=utf-8');
+        return;
+    }
+
     if (url === '/api/steam/link' && req.method === 'POST') {
         let raw = '';
         req.on('data', d => { raw += d; });
@@ -1297,11 +1312,12 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 try {
                     const folder = resolveShareFolder(b.folder);
                     fs.mkdirSync(folder, { recursive: true });
+                    LAST_SUB_HTML = subHtmlFor(live, genAt);
                     html = path.join(folder, 'subscribe.html');
-                    fs.writeFileSync(html, subHtmlFor(live, genAt), 'utf8');
+                    fs.writeFileSync(html, LAST_SUB_HTML, 'utf8');
                     // 同名文件会被浏览器缓存，导致点开的还是旧的一版；另存一份带时间戳的副本专门用于打开
                     htmlOpen = path.join(folder, 'subscribe-' + ts + '.html');
-                    fs.writeFileSync(htmlOpen, subHtmlFor(live, genAt), 'utf8');
+                    fs.writeFileSync(htmlOpen, LAST_SUB_HTML, 'utf8');
                     try {
                         const olds = fs.readdirSync(folder).filter(f => /^subscribe-\d+\.html$/i.test(f)).sort();
                         for (let i = 0; i < olds.length - 2; i++) fs.unlinkSync(path.join(folder, olds[i]));
