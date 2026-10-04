@@ -1277,6 +1277,29 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         return;
     }
 
+    // steam:// 协议关联有可能失效（点了没反应）；直接用 Steam.exe 打开 URL 更可靠
+    let STEAM_EXE_CACHE = '';
+    function steamExePath() {
+        if (STEAM_EXE_CACHE) return STEAM_EXE_CACHE;
+        const keys = ['HKCU\\Software\\Classes\\steam\\shell\\open\\command', 'HKLM\\Software\\Classes\\steam\\shell\\open\\command'];
+        for (const k of keys) {
+            try {
+                const out = execSync('reg query "' + k + '" /ve', { windowsHide: true, timeout: 4000 }).toString();
+                const m = out.match(/"([^"]+[\\/]steam\.exe)"/i);
+                if (m && fs.existsSync(m[1])) { STEAM_EXE_CACHE = m[1]; return STEAM_EXE_CACHE; }
+            } catch (e) { /* 继续试下一个 key */ }
+        }
+        STEAM_EXE_CACHE = '';
+        return '';
+    }
+    function openSteamUrl(u) {
+        const exe = steamExePath();
+        try {
+            exec(exe ? ('cmd /c start "" "' + exe + '" "' + u + '"') : ('cmd /c start "" "' + u + '"'), () => { });
+        } catch (e) { /* 忽略 */ }
+        return !!exe;
+    }
+
     if (url === '/api/steam/subscribe' && req.method === 'POST') {
         let raw = '';
         req.on('data', d => { raw += d; });
@@ -1290,16 +1313,20 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 }
                 const useWeb = b.mode === 'web';
                 if (!ids.length) throw new Error('没有可订阅的创意工坊 mod（本地 mod 无法订阅）');
+                const viaExe = openSteamUrl('steam://subscribe/' + ids[0]);
                 // 分批慢发：连着几十条打给 Steam 会被限流，之后社区页会变成各种报错页（包括「该物品不存在」）
                 const SIZE = 8, GAP = 800, CHUNK_GAP = 6000;
                 ids.forEach((id, i) => {
                     const u = useWeb ? ('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id) : ('steam://subscribe/' + id);
                     const wait = (i % SIZE) * GAP + Math.floor(i / SIZE) * CHUNK_GAP;
-                    setTimeout(() => { try { exec('cmd /c start "" "' + u + '"'); } catch (e) { /* 忽略 */ } }, wait);
+                    setTimeout(() => {
+                        if (useWeb) { try { exec('cmd /c start "" "' + u + '"'); } catch (e) { /* 忽略 */ } return; }
+                        openSteamUrl(u);
+                    }, wait);
                 });
                 const chunks = Math.ceil(ids.length / SIZE);
                 send(res, 200, JSON.stringify({
-                    ok: true, count: ids.length, mode: useWeb ? 'web' : 'steam', chunks: chunks,
+                    ok: true, count: ids.length, mode: useWeb ? 'web' : 'steam', chunks: chunks, viaExe: viaExe, exe: steamExePath(),
                     seconds: Math.round((((ids.length % SIZE) || SIZE) - 1) * GAP / 1000 + (chunks - 1) * CHUNK_GAP / 1000),
                 }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }

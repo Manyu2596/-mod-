@@ -737,6 +737,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             '<button id="linkHtml">打开订阅清单页面</button>' +
             '<button id="linkColl">做 Steam 合集（脚本一键加满）</button>' +
             '<button id="linkVerify">校验链接</button>' +
+            '<button id="linkTest">测试能否拉起 Steam</button>' +
             '<button id="linkClose">关闭</button>' +
             '</div>' +
             '<div class="hint" style="margin-top:6px">Steam 的协议一次只确认一个 mod；想让对方「一次订阅全部」，用「做 Steam 合集」——把 mod 加进合集后分享合集链接，对方点「订阅全部」即可。</div>' +
@@ -766,6 +767,19 @@ document.getElementById('btnSubLink').onclick = async () => {
             if (!target) { show('订阅清单页面没生成成功', false); return; }
             await fetch('/api/share/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: (document.getElementById('pShare') || {}).value || '', select: target, browser: true }) });
             show('已用浏览器打开刚生成的订阅清单页面（文件名带时间戳，不会是旧的一版）', true);
+        };
+        document.getElementById('linkTest').onclick = async () => {
+            const tb = document.getElementById('linkTest');
+            tb.disabled = true; tb.textContent = '测试中...';
+            try {
+                const one = (d.liveIds || []).slice(0, 1);
+                const rr = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: one, mode: 'steam' }) });
+                const dd = await rr.json();
+                show(dd.ok
+                    ? ('已发送订阅请求给 Steam（走 ' + (dd.viaExe ? ('Steam.exe 直连：' + dd.exe) : '系统 steam:// 协议') + '）。请看你电脑上 Steam 有没有弹出这个 mod 的订阅确认窗：弹出来了说明这条路通，之后用「自己先订阅一遍」就行；完全没动静说明 Steam 客户端当前接管不了链接，需要彻底退出 Steam 再重开一次')
+                    : ('失败：' + dd.error), !!dd.ok);
+            } catch (e) { show('失败：' + e.message, false); }
+            tb.disabled = false; tb.textContent = '测试能否拉起 Steam';
         };
         document.getElementById('linkVerify').onclick = async () => {
             const vb = document.getElementById('linkVerify');
