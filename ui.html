@@ -100,7 +100,6 @@ li.over{border-color:#6366f1}
 <div class="bar">
   <button class="primary" id="save">保存到游戏</button>
   <button id="resort">重新排序</button>
-  <button id="clearMods">清空mod</button>
   <button id="test">启动游戏</button>
   <button id="reload">扫描路径</button>
   <button id="updates">检查更新</button>
@@ -148,13 +147,14 @@ li.over{border-color:#6366f1}
 </div>
 
 <div class="cols">
+  <style>h2{display:flex;align-items:center;gap:8px}h2 span{flex:0 0 auto}h2 .colbtn{margin-left:auto;background:#303a52;color:#e6e9ef;border:1px solid #3b465f;border-radius:7px;padding:3px 12px;font-size:12.5px;cursor:pointer}h2 .colbtn:hover{background:#3d4a67}h2 .colbtn:disabled{opacity:.5;cursor:default}</style>
   <div class="col">
-    <h2>① 已启用<span id="ca"></span></h2>
+    <h2>① 已启用<span id="ca"></span><button id="clearMods" class="colbtn" title="全部停用并写入游戏配置">清空</button></h2>
     <div class="hint">列表从上到下加载，越靠下优先级越高</div>
     <ul id="activeList"></ul>
   </div>
   <div class="col">
-    <h2>② 未启用<span id="ci"></span></h2>
+    <h2>② 未启用<span id="ci"></span><button id="enableAll" class="colbtn" title="把右栏全部 mod 启用（插入左栏末尾）">一键启用</button></h2>
     <div class="hint">不参与加载，启用后会按规则插入左栏</div>
     <ul id="idleList"></ul>
   </div>
@@ -360,6 +360,22 @@ document.getElementById('clearMods').onclick = async () => {
         else show('清空失败：' + d.error, false);
     } catch (e) { show('清空失败：' + e.message, false); }
     btn.disabled = false; btn.textContent = '清空mod';
+};
+
+// 一键启用：右栏全部移到左栏末尾并写入游戏配置
+document.getElementById('enableAll').onclick = async () => {
+    if (!idle.length) { show('右栏没有未启用的 mod', true); return; }
+    const btn = document.getElementById('enableAll');
+    btn.disabled = true; const old = btn.textContent; btn.textContent = '启用中...';
+    try {
+        active = active.concat(idle);
+        idle = [];
+        render();
+        const d = await saveNow(true);
+        if (d.ok) show('已启用全部 mod 并写入游戏配置（新启用的排在列表末尾，可拖动调整顺序）', true);
+        else show('启用失败：' + d.error, false);
+    } catch (e) { show('启用失败：' + e.message, false); }
+    btn.disabled = false; btn.textContent = old;
 };
 
 document.getElementById('save').onclick = async () => {
