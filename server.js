@@ -34,6 +34,8 @@ function configPath() { return path.join(getPaths().GAME, 'config_player.xml'); 
 // 配置回滚历史 / 译文 / 版本基线」一律不放在程序目录里。
 // 默认也不放 C 盘：自动挑一个非系统盘（剩余空间最大的那个）建「潜渊症Mod管理器数据」；
 // 想放哪都行 —— 设环境变量 BARO_DATA，或在界面「存档管理 → 更换数据目录」里指定。
+const CHECK_PAGE_JS = "function esc2(s){return String(s==null?'':s).replace(/[&<>\"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c];});}\nfunction cmp(mine){\n  var host=MAN.items;\n  var hids=host.map(function(m){return m.id;});\n  var mids=mine.map(function(m){return String(m.id);});\n  var miss=host.filter(function(m){return mids.indexOf(m.id)<0;});\n  var extra=mine.filter(function(m){return hids.indexOf(String(m.id))<0;});\n  var common=host.filter(function(m){return mids.indexOf(m.id)>=0;});\n  var order=[];\n  var pos={};mids.forEach(function(id,i){pos[id]=i;});\n  for(var i=1;i<common.length;i++){\n    var a=common[i-1],b=common[i];\n    if(pos[b.id]<pos[a.id]) order.push(a.zh+' 应该在 '+b.zh+' 之后');\n  }\n  var local=host.filter(function(m){return !m.ws;});\n  var h='<h3>比对结果</h3>';\n  if(!miss.length&&!extra.length&&!order.length) h+='<div class=\"ok\">完全一致 —— 你可以正常进房，不会因为 mod 不一致在「开始游戏」时掉线。</div>';\n  else h+='<div class=\"bad\">和房主不一致，按下面处理完再进房：</div>';\n  if(miss.length){\n    h+='<ul><li class=\"bad\">你缺 '+miss.length+' 个：</li><ul>';\n    miss.forEach(function(m){\n      h+='<li>'+esc2(m.zh)+(m.ws?' <a href=\"https://steamcommunity.com/sharedfiles/filedetails/?id='+m.id+'\" target=\"_blank\">去订阅</a>':' <b class=\"bad\">（本地 mod，只能让房主把文件发给你）</b>')+'</li>';\n    });\n    h+='</ul></ul>';\n    var nw=miss.filter(function(m){return m.ws;}).length;\n    if(nw) h+='<div style=\"margin:6px 0\"><button class=\"pri\" id=\"subAll\">打开缺失 mod 的订阅页面（'+nw+' 个）</button><span class=\"hint\">订阅后自己开一次单人游戏触发下载，等 Steam 下载完再进房</span></div>';\n  }\n  if(extra.length){\n    h+='<ul><li class=\"warn\">你比房主多启用了 '+extra.length+' 个（联机时会被房主的配置覆盖，一般不会掉线，但建议先停用）：</li><ul>';\n    extra.slice(0,30).forEach(function(m){h+='<li>'+esc2(m.zh||m.name||m.id)+'</li>';});\n    h+='</ul></ul>';\n  }\n  if(order.length){\n    h+='<ul><li class=\"warn\">加载顺序不同（'+order.length+' 处，会影响谁覆盖谁）：</li><ul>';\n    order.slice(0,8).forEach(function(t){h+='<li>'+esc2(t)+'</li>';});\n    h+='</ul></ul>';\n  }\n  if(local.length){\n    h+='<ul><li class=\"bad\">房主启用了 '+local.length+' 个本地 mod（'+esc2(local.slice(0,5).map(function(m){return m.zh;}).join('、'))+'）。本地 mod 不会通过 Steam 同步给你，必须让房主把文件发过来装好，否则进房必掉。</li></ul>';\n  }\n  var r=document.getElementById('res');r.innerHTML=h;\n  var b=document.getElementById('subAll');\n  if(b) b.onclick=function(){\n    miss.filter(function(m){return m.ws;}).forEach(function(m,i){\n      setTimeout(function(){window.open('https://steamcommunity.com/sharedfiles/filedetails/?id='+m.id,'_blank');},i*350);\n    });\n  };\n}\nfunction fromXml(txt){\n  var m=txt.match(/<regularpackages>([\\s\\S]*?)<\\/regularpackages>/);\n  if(!m) throw new Error('这个文件里没有 regularpackages，确认选的是 config_player.xml');\n  var out=[];\n  var re=/<contentpackage\\s+[^>]*?name=\"([^\"]*)\"[^>]*?path=\"([^\"]*)\"[^>]*?\\/>/gi;\n  var x;\n  while((x=re.exec(m[1]))){\n    var p=x[2].replace(/\\\\/g,'/');\n    var id=p.split('/').pop().replace(/\\.cr$/i,'');\n    out.push({id:id,name:x[1],zh:x[1]});\n  }\n  if(!out.length){\n    var re2=/<contentpackage\\s+[^>]*?path=\"([^\"]*)\"[^>]*?\\/>/gi;\n    while((x=re2.exec(m[1]))){\n      var p2=x[1].replace(/\\\\/g,'/');\n      out.push({id:p2.split('/').pop().replace(/\\.cr$/i,''),name:'',zh:''});\n    }\n  }\n  if(!out.length) throw new Error('没解析到任何 mod。先自己启动一次单人游戏（让游戏写入配置）再来。');\n  return out;\n}\nasync function auto(){\n  var r=document.getElementById('res');\n  r.innerHTML='<div class=\"hint\">正在检测本机…</div>';\n  var ports=[9182,9183,9184,9185];\n  for(var k=0;k<ports.length;k++){\n    try{\n      var resp=await fetch('http://127.0.0.1:'+ports[k]+'/api/data',{cache:'no-store'});\n      var d=await resp.json();\n      var act=(d.active||[]).map(function(m){return {id:String(m.id),name:m.name||'',zh:m.zh||m.name||''};});\n      if(!act.length){r.innerHTML='<div class=\"warn\">读到 0 个已启用 mod —— 先在游戏里启用并保存一次，或先自己开一局单人游戏。</div>';return;}\n      cmp(act);return;\n    }catch(e){}\n  }\n  r.innerHTML='<div class=\"warn\">没连上本机的潜渊症Mod管理器（没装或没启动）。装了的话先打开它再点「自动检测」；没装就点「选择 config_player.xml」。</div>';\n}\ndocument.getElementById('btnAuto').onclick=auto;\ndocument.getElementById('btnFile').onclick=function(){document.getElementById('f').click();};\ndocument.getElementById('f').onchange=function(){\n  var f=this.files[0];if(!f)return;\n  var rd=new FileReader();\n  rd.onload=function(){\n    try{cmp(fromXml(String(rd.result)));}\n    catch(e){document.getElementById('res').innerHTML='<div class=\"bad\">读取失败：'+esc2(e.message)+'</div>';}\n  };\n  rd.readAsText(f,'utf-8');\n};\nauto();\n";
+
 const DATA_DIR_NAME = '潜渊症Mod管理器数据';
 const REG_KEY = 'HKCU\\Software\\潜渊症Mod管理器';
 
@@ -651,12 +653,16 @@ function send(res, code, body, type) {
     res.writeHead(code, {
         'Content-Type': type || 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
+        // 允许本工具生成的「联机一致性检查页」（file:// 打开）读取本机接口做自动比对
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
     });
     res.end(body);
 }
 
 // 最近一次生成的订阅清单 HTML（供 GET /subscribe 以 http 方式打开；file:// 页面里的 steam:// 会被浏览器静默拦截）
 let LAST_SUB_HTML = '';
+let LAST_CHECK_HTML = '';
 
 // 通过 Steam 启动游戏（本地服务，仅在本机生效）
 function launchGame() {
@@ -1527,6 +1533,99 @@ const server = http.createServer((req, res) => {
                 localMods, bigMods, hasLua, hasLuaClient, tips: hostTips,
             }
         };
+    }
+
+
+    function escH(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+    // 主机这套启用列表的「指纹」：id / 名称 / 顺序 / 工坊版本，用于和队友比对
+    function hostManifest() {
+        const P = getPaths();
+        const W = P.WORKSHOP || '', LM = P.LOCALMODS || '';
+        const data = buildData();
+        const readV = (p) => {
+            try { const t = fs.readFileSync(p, 'utf8'); return (/modversion="([^"]*)"/i.exec(t) || [, ''])[1]; }
+            catch (e) { return ''; }
+        };
+        const items = (data.active || []).map((m, i) => {
+            const id = String(m.id);
+            let ver = '';
+            if (W && fs.existsSync(path.join(W, id, 'filelist.xml'))) ver = readV(path.join(W, id, 'filelist.xml'));
+            else if (LM && fs.existsSync(path.join(LM, id, 'filelist.xml'))) ver = readV(path.join(LM, id, 'filelist.xml'));
+            return { id, name: m.name || '', zh: m.zh || m.name || '', order: i + 1, ver, ws: __isWs(id) };
+        });
+        return { items, count: items.length, totalMB: Math.round((data.active || []).reduce((t, m) => t + (m.sizeBytes || 0), 0) / 1048576) };
+    }
+
+    // 发给队友的自包含检查页：离线可用，队友打开就能知道自己缺哪些 / 顺序对不对
+    function checkPageHtml(man, genAt) {
+        const rows = man.items.map(m => {
+            const src = m.ws
+                ? ('<a href="https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id + '" target="_blank">创意工坊 ' + m.id + '</a>')
+                : '<b style="color:#fca5a5">本地 mod（无法订阅）</b>';
+            return '<tr><td>' + m.order + '</td><td>' + escH(m.zh || m.name) + '</td><td>' + src + '</td><td>' + escH(m.ver || '-') + '</td></tr>';
+        }).join('');
+        return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">' +
+            '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+            '<title>联机一致性检查 · 潜渊症</title><style>' +
+            'body{font-family:"Microsoft YaHei",system-ui,sans-serif;background:#0b1020;color:#e6e9ef;margin:0;padding:20px;line-height:1.6}' +
+            'h1{font-size:19px;margin:0 0 4px}h3{font-size:15px;margin:18px 0 6px}' +
+            '.box{background:#131a2c;border:1px solid #26304a;border-radius:12px;padding:14px;margin-bottom:14px}' +
+            'table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 8px;border-bottom:1px solid #222c44;text-align:left}' +
+            'th{color:#9aa4bf;font-weight:600;font-size:12px}a{color:#7dd3fc}' +
+            'button{background:#1e293b;color:#e6e9ef;border:1px solid #3b4766;border-radius:9px;padding:8px 13px;cursor:pointer;font-size:13px;margin:3px 4px 3px 0}' +
+            'button.pri{background:#1d4ed8;border-color:#2563eb}button:hover{filter:brightness(1.15)}' +
+            '.ok{color:#86efac}.bad{color:#fca5a5}.warn{color:#fcd34d}.hint{color:#93a0bb;font-size:12.5px}' +
+            'li{margin:3px 0}#res ul{margin:6px 0 0 16px}' +
+            '</style></head><body>' +
+            '<div class="box"><h1>联机一致性检查</h1>' +
+            '<div class="hint">房主的启用清单生成于 ' + escH(genAt) + '，共 ' + man.count + ' 个内容包、约 ' + man.totalMB + ' MB。' +
+            '这份文件是离线自包含的，直接打开就行 —— 它会检查你这台电脑的 mod 与房主是否一致（不一致就会在「开始游戏」那一刻掉线）。</div>' +
+            '<div style="margin-top:10px">' +
+            '<button class="pri" id="btnAuto">自动检测（需要开着潜渊症Mod管理器）</button>' +
+            '<button id="btnFile">或选择游戏的 config_player.xml</button>' +
+            '<input type="file" id="f" accept=".xml" style="display:none">' +
+            '</div><div id="res"></div></div>' +
+            '<div class="box"><h3>房主的启用清单（按加载顺序）</h3>' +
+            '<table><thead><tr><th>#</th><th>名称</th><th>来源</th><th>版本</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+            '<div class="hint" style="margin-top:8px">顺序很重要：越靠后的 mod 覆盖前面的。顺序不同不会掉线，但效果会和房主看到的不一样。</div></div>' +
+            '<scr' + 'ipt>const MAN=' + JSON.stringify(man).replace(/<\/scr/gi, '<\\/scr') + ';\n' + CHECK_PAGE_JS + '</scr' + 'ipt></body></html>';
+    }
+
+
+    // 生成「联机一致性检查页」：一个自包含 HTML，发给队友打开即可比对
+    if (url === '/api/joincheck/share' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw || '{}');
+                const man = hostManifest();
+                if (!man.count) throw new Error('当前没有启用任何 mod，先保存一次再生成');
+                const genAt = new Date().toLocaleString('zh-CN', { hour12: false });
+                LAST_CHECK_HTML = checkPageHtml(man, genAt);
+                let folder = '', file = '';
+                try {
+                    folder = resolveShareFolder(b.folder);
+                    fs.mkdirSync(folder, { recursive: true });
+                    file = path.join(folder, '联机一致性检查.html');
+                    fs.writeFileSync(file, LAST_CHECK_HTML, 'utf8');
+                    try { spawn('explorer', [folder], { detached: true, stdio: 'ignore' }).unref(); } catch (e) { }
+                } catch (e) { }
+                send(res, 200, JSON.stringify({
+                    ok: true, count: man.count, totalMB: man.totalMB, genAt,
+                    html: file, folder, local: man.items.filter(m => !m.ws).length,
+                }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    // 以 http 方式打开检查页（file:// 下个别浏览器会限制本地请求，走这个更稳）
+    if (url === '/check') {
+        if (!LAST_CHECK_HTML) { send(res, 404, '<!doctype html><meta charset="utf-8"><body style="background:#0b1020;color:#e6e9ef;padding:24px;font-family:sans-serif">还没有生成检查页，请回到工具里点一次「生成队友检查页」。', 'text/html; charset=utf-8'); return; }
+        send(res, 200, LAST_CHECK_HTML, 'text/html; charset=utf-8');
+        return;
     }
 
     if (url === '/api/paths/rescan' && req.method === 'POST') {
