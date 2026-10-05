@@ -21,7 +21,7 @@
 
 ### 方式一：绿色版（推荐，免安装）
 
-1. 到 **Releases** 下载 `BarotraumaModManager-v1.23.zip`
+1. 到 **Releases** 下载 `BarotraumaModManager-v1.30.zip`
 2. 解压到任意位置
 3. 双击 **`潜渊症Mod管理器.vbs`** → 弹出程序窗口（完全没有安装过程，也没黑窗口）
 
@@ -29,7 +29,7 @@
 
 ### 方式二：安装版（自动建快捷方式）
 
-1. 到 **Releases** 下载 `BarotraumaModManager-v1.23-Setup.exe`
+1. 到 **Releases** 下载 `BarotraumaModManager-v1.30-Setup.exe`
 2. 双击运行 → 自动安装到 `%LOCALAPPDATA%\潜渊症Mod管理器`，并在桌面与开始菜单生成快捷方式
 3. 装完直接双击快捷方式即可
 
