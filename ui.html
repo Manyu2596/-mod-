@@ -152,14 +152,14 @@ li.over{border-color:#6366f1}
 </div>
 
 <div class="cols">
-  <style>h2{display:flex;align-items:center;gap:8px}h2 span{flex:0 0 auto}h2 .colbtn{margin-left:auto;background:#303a52;color:#e6e9ef;border:1px solid #3b465f;border-radius:7px;padding:3px 12px;font-size:12.5px;cursor:pointer}h2 .colbtn:hover{background:#3d4a67}h2 .colbtn:disabled{opacity:.5;cursor:default}</style>
+  <style>h2{display:flex;align-items:center;gap:8px}h2 span{flex:0 0 auto}h2 .btns{margin-left:auto;display:flex;gap:8px}h2 .colbtn{background:#303a52;color:#e6e9ef;border:1px solid #3b465f;border-radius:7px;padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:inherit}h2 .colbtn.en{background:#1e5c46;border-color:#2c8a63;color:#eafff6}h2 .colbtn.en:hover{background:#267a5c}h2 .colbtn.dg{background:#5c2333;border-color:#8a3350;color:#ffeef2}h2 .colbtn.dg:hover{background:#7a2f43}h2 .colbtn:disabled{opacity:.5;cursor:default}</style>
   <div class="col">
-    <h2>① 已启用<span id="ca"></span><button id="clearMods" class="colbtn" title="全部停用并写入游戏配置">清空</button></h2>
+    <h2>① 已启用<span id="ca"></span><span class="btns"><button id="enableAllTop" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用全部</button><button id="clearMods" class="colbtn dg" title="全部停用并写入游戏配置">清空</button></span></h2>
     <div class="hint">列表从上到下加载，越靠下优先级越高</div>
     <ul id="activeList"></ul>
   </div>
   <div class="col">
-    <h2>② 未启用<span id="ci"></span><button id="enableAll" class="colbtn" title="把右栏全部 mod 启用（插入左栏末尾）">一键启用</button></h2>
+    <h2>② 未启用<span id="ci"></span><span class="btns"><button id="enableAll" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用</button></span></h2>
     <div class="hint">不参与加载，启用后会按规则插入左栏</div>
     <ul id="idleList"></ul>
   </div>
@@ -405,14 +405,15 @@ document.getElementById('clearMods').onclick = async () => {
         if (d.ok) show('已清空：全部 mod 已停用并写入游戏配置。想恢复可在右栏重新启用，或用「mod方案存档」切回', true);
         else show('清空失败：' + d.error, false);
     } catch (e) { show('清空失败：' + e.message, false); }
-    btn.disabled = false; btn.textContent = '清空mod';
+    btn.disabled = false; btn.textContent = '清空';
 };
 
-// 一键启用：右栏全部移到左栏末尾并写入游戏配置
-document.getElementById('enableAll').onclick = async () => {
+// 一键启用：右栏全部移到左栏末尾并写入游戏配置（左栏表头和右栏表头两个按钮共用）
+async function enableAllMods() {
     if (!idle.length) { show('右栏没有未启用的 mod', true); return; }
-    const btn = document.getElementById('enableAll');
-    btn.disabled = true; const old = btn.textContent; btn.textContent = '启用中...';
+    const btns = ['enableAll', 'enableAllTop'].map(function (i) { return document.getElementById(i); }).filter(Boolean);
+    const texts = btns.map(function (b) { return b.textContent; });
+    btns.forEach(function (b) { b.disabled = true; b.textContent = '启用中...'; });
     try {
         active = active.concat(idle);
         idle = [];
@@ -421,8 +422,10 @@ document.getElementById('enableAll').onclick = async () => {
         if (d.ok) show('已启用全部 mod 并写入游戏配置（新启用的排在列表末尾，可拖动调整顺序）', true);
         else show('启用失败：' + d.error, false);
     } catch (e) { show('启用失败：' + e.message, false); }
-    btn.disabled = false; btn.textContent = old;
-};
+    btns.forEach(function (b, i) { b.disabled = false; b.textContent = texts[i]; });
+}
+document.getElementById('enableAll').onclick = function () { enableAllMods(); };
+document.getElementById('enableAllTop').onclick = function () { enableAllMods(); };
 
 // 联机自检：检查启用的 mod 是否真的能被联机加载（工坊副本 → 游戏加载目录）
 document.getElementById('joinCheck').onclick = async () => {
