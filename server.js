@@ -1483,7 +1483,50 @@ const server = http.createServer((req, res) => {
                 if (vw !== vi) problems.push({ id, name: nm, kind: 'stale', why: '游戏加载目录是 v' + vi + '，工坊最新是 v' + vw + '，联机会被要求重新下载' });
             }
         });
-        return { total: (data.active || []).length, problems };
+        // ---- 主机视角：这些东西队友能不能拿到（掉线多半出在这儿）----
+        const act = data.active || [];
+        const isWs = id => __isWs(id);
+        const localMods = act.filter(m => !isWs(m.id))
+            .map(m => ({ id: String(m.id), name: m.zh || m.name, sizeMB: Math.round((m.sizeBytes || 0) / 1048576) }));
+        const totalMB = Math.round(act.reduce((t, m) => t + (m.sizeBytes || 0), 0) / 1048576);
+        // 单个超过 80MB 的，客户端下载/加载最久，最容易在「开始游戏」那一刻掉
+        const bigMods = act.filter(m => (m.sizeBytes || 0) >= 80 * 1048576)
+            .map(m => ({ id: String(m.id), name: m.zh || m.name, sizeMB: Math.round((m.sizeBytes || 0) / 1048576) }))
+            .sort((a, b) => b.sizeMB - a.sizeMB);
+        const hasLua = act.some(m => /luacsforbarotrauma/i.test(String(m.name)));
+        const hasLuaClient = act.some(m => /luacsclientside/i.test(String(m.name)));
+        const wsIds = act.filter(m => isWs(m.id)).map(m => String(m.id));
+
+        const hostTips = [];
+        if (localMods.length) hostTips.push({
+            sev: 'c',
+            text: '你启用了 ' + localMods.length + ' 个本地 mod（不是创意工坊的）：' + localMods.map(m => m.name).slice(0, 6).join('、') +
+                '。本地 mod 不会通过 Steam 同步给队友，他们加入后会在「开始游戏」时缺内容被踢掉 —— 要么停用，要么用「导出mod文件」打包发给他们。'
+        });
+        if (hasLua && !hasLuaClient) hostTips.push({
+            sev: 'c',
+            text: '你开了 LuaCsForBarotrauma，但没开 LuaCsClientSideEnforced：客户端的 Lua 脚本不会加载，队友一进游戏就会报错断开。把它启用并排到 LuaCsForBarotrauma 之后。'
+        });
+        if (totalMB >= 300) hostTips.push({
+            sev: 'w',
+            text: '你这套 mod 一共约 ' + totalMB + ' MB / ' + act.length + ' 个。队友必须先把它们全部订阅并下载完，只订阅没下完就进房，会在点「开始」时因缺文件掉线。让他们先订阅 → 打开一次单人游戏（触发下载）→ 等 Steam 下载完毕再进。'
+        });
+        if (bigMods.length) hostTips.push({
+            sev: 'i',
+            text: '其中体积大的有：' + bigMods.slice(0, 5).map(m => m.name + '（' + m.sizeMB + ' MB）').join('、') + '。这几个最占下载时间，队友卡住多半在等它们。'
+        });
+        if (act.length >= 40) hostTips.push({
+            sev: 'i',
+            text: '启用 ' + act.length + ' 个内容包，联机同步压力大。如果反复掉线，可以先精简到必需的试试（用「mod方案存档」存一套精简组合）。'
+        });
+
+        return {
+            total: act.length, problems,
+            host: {
+                count: act.length, totalMB, wsCount: wsIds.length, wsIds,
+                localMods, bigMods, hasLua, hasLuaClient, tips: hostTips,
+            }
+        };
     }
 
     if (url === '/api/paths/rescan' && req.method === 'POST') {

@@ -279,6 +279,7 @@ body.light input::placeholder{color:#9aa3b5}
 <div class="report" id="ovBox" style="display:none"></div>
 <div class="report" id="histBox" style="display:none"></div>
 <div class="report" id="report"></div>
+<div class="report" id="jcBox" style="display:none"></div>
 
 <div class="paths" id="pathBox">
   <div class="ptitle">路径设置<span>找不到 mod / 游戏不在默认位置时，可以手动指定</span><span class="mtag" id="manualTag"></span></div>
@@ -695,21 +696,43 @@ async function enableAllMods() {
 document.getElementById('enableAll').onclick = function () { enableAllMods(); };
 document.getElementById('enableAllTop').onclick = function () { enableAllMods(); };
 
-// 联机自检：检查启用的 mod 是否真的能被联机加载（工坊副本 → 游戏加载目录）
+// 联机自检：既查自己（能不能进别人房），也查开房（队友能不能拿到这些东西）
 document.getElementById('joinCheck').onclick = async () => {
     const btn = document.getElementById('joinCheck');
     btn.disabled = true; const old = btn.textContent; btn.textContent = '检查中...';
     try {
         const r = await fetch('/api/joincheck');
         const d = await r.json();
-        if (!d.ok) { show('检查失败：' + d.error, false); }
-        else if (!d.problems.length) {
-            show('联机自检通过：' + d.total + ' 个启用 mod 都已在游戏加载目录、版本与工坊一致，加入别人游戏不会再要求重新下载', true);
-        } else {
-            const txt = d.problems.map((p, i) => (i + 1) + '. ' + p.name + ' — ' + p.why).join('\n');
-            alert('发现 ' + d.problems.length + ' 个可能导致联机时要求重新下载的问题：\n\n' + txt);
-            show('发现 ' + d.problems.length + ' 个问题（明细见弹窗）：建议先处理再联机', false);
-        }
+        if (!d.ok) { show('检查失败：' + d.error, false); return; }
+        const box = document.getElementById('jcBox');
+        const h = d.host || {};
+        const prob = (d.problems || []).length
+            ? '<div class="sev c">你这边有 ' + d.problems.length + ' 个问题（进别人房间也可能被要求重新下载）：</div><ul>'
+                + (d.problems || []).map(p => '<li>· ' + esc(p.name) + ' — ' + esc(p.why) + '</li>').join('') + '</ul>'
+            : '<div class="sev i">你这边没问题：' + d.total + ' 个启用 mod 都在游戏加载目录，且版本与工坊一致。</div>';
+        const tips = (h.tips || []).length
+            ? (h.tips || []).map(t => '<li><span class="sev ' + t.sev + '">·</span> ' + esc(t.text) + '</li>').join('')
+            : '<li><span class="sev i">·</span> 没发现会导致队友掉线的问题。</li>';
+        box.innerHTML = '<h3>联机自检（你是主机：' + (h.count || d.total || 0) + ' 个启用 mod · 约 ' + (h.totalMB || 0) + ' MB）</h3>' +
+            prob +
+            '<div style="margin-top:8px" class="sev w">队友要准备的：</div><ul>' + tips + '</ul>' +
+            '<div class="hint" style="margin-top:6px">队友的标准流程：' +
+            '① 订阅下面清单里全部工坊 mod → ② 自己开一次单人游戏（触发 Steam 下载并把 mod 复制进加载目录）→ ' +
+            '③ 等 Steam 下载完（创意工坊 → 下载）→ ④ 再进你的房间。没下完就点开始，会在载入那一刻因缺文件被踢掉。</div>' +
+            '<div class="pbtns">' +
+            '<button id="jcSub" class="primary">给队友生成订阅清单（' + (h.wsCount || 0) + ' 个工坊 mod）</button>' +
+            '<button id="jcClose">关闭</button></div>';
+        box.style.display = 'block';
+        box.className = 'report ' + (prob.indexOf('class="sev c"') >= 0 ? 'danger' : 'warn');
+        document.getElementById('jcClose').onclick = () => { box.style.display = 'none'; };
+        document.getElementById('jcSub').onclick = () => {
+            const ids = h.wsIds || [];
+            if (!ids.length) { show('没有可订阅的工坊 mod', false); return; }
+            const nm = {}; active.concat(idle).forEach(m => { nm[String(m.id)] = m.zh || m.name; });
+            renderSubscribe(ids.map(id => ({ id: id, name: nm[id] || '' })));
+            show('已生成订阅清单：把页面里的链接发给队友，或点「在网页里订阅」自己订阅', true);
+        };
+        show('联机自检完成：' + (d.problems || []).length + ' 个本机问题，' + (h.tips || []).length + ' 条开房提醒', !(d.problems || []).length);
     } catch (e) { show('检查失败：' + e.message, false); }
     finally { btn.disabled = false; btn.textContent = old; }
 };
