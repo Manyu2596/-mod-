@@ -1110,11 +1110,14 @@ async function savesRefresh() {
         + ' · ' + b.count + ' 个文件 · ' + fmtSize(b.size) + '</span> '
         + '<button data-rs="' + esc(b.id) + '">恢复</button> <button data-db="' + esc(b.id) + '">删除</button></li>').join('');
     box.innerHTML = '<h3>存档管理</h3>' +
-        '<div>单人存档和多人存档是<b>分开</b>的两套：单人在存档根目录，多人在 Multiplayer 子目录。备份存在软件目录的 savebackups 里，恢复前会自动给当前存档再留一份。</div>' +
+        '<div>单人存档和多人存档是<b>分开</b>的两套：单人在存档根目录，多人在 Multiplayer 子目录。恢复前会自动给当前存档再留一份。</div>' +
+        '<div class="hint">备份 / 方案存档都存在<b>独立的数据目录</b>：' + esc(d.dataDir || '') + '，跟软件安装目录分开（默认也不放 C 盘），更新版本、重装都不会被删掉。</div>' +
+        '<div id="svDataPick" style="display:none;margin-top:6px"></div>' +
         '<div class="pbtns">' +
         '<button id="svOpenSingle">打开单人存档文件夹</button>' +
         '<button id="svOpenMulti">打开多人存档文件夹</button>' +
         '<button id="svOpenBk">打开备份文件夹</button>' +
+        '<button id="svMoveData" title="把存档备份、方案存档换到别的盘">更换数据目录…</button>' +
         '<button id="svClose">关闭</button>' +
         '<span class="hint">游戏开着的时候别恢复存档，先退出游戏</span></div>' +
         slots(d.single, 'single', '单人存档', d.dirSingle) +
@@ -1127,6 +1130,37 @@ async function savesRefresh() {
     document.getElementById('svOpenSingle').onclick = () => open('single');
     document.getElementById('svOpenMulti').onclick = () => open('multi');
     document.getElementById('svOpenBk').onclick = () => open('backup');
+    // 数据目录：默认不放 C 盘，这里可以随时换到别的盘
+    const pick = document.getElementById('svDataPick');
+    document.getElementById('svMoveData').onclick = async () => {
+        let r = {};
+        try { r = await (await fetch('/api/datadir')).json(); } catch (e) { show('读取失败：' + e.message, false); return; }
+        const cands = (r.candidates || []).map(c =>
+            '<button data-dd="' + esc(c.dir) + '">' + esc(c.drive) + ' 盘（可用 ' + c.freeGB + ' GB）</button>').join(' ');
+        pick.innerHTML = '<div class="sev i">换到哪个盘</div>' +
+            '<div class="pbtns">' + (cands || '<span class="hint">没检测到其它磁盘</span>') + '</div>' +
+            '<div class="pbtns"><input id="svDataCustom" placeholder="或自己填路径，例：E:\\潜渊症数据" style="flex:1;min-width:200px">'
+            + '<button id="svDataApply">用这个目录</button><button id="svDataCancel">取消</button></div>' +
+            '<div class="hint">换过去时会自动把备份、方案存档、回滚历史一起复制过去；旧位置的文件保留不动。</div>';
+        pick.style.display = 'block';
+        const apply = async (dir) => {
+            let rr = {};
+            try {
+                const resp = await fetch('/api/datadir/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir }) });
+                rr = await resp.json();
+            } catch (e) { show('切换失败：' + e.message, false); return; }
+            if (!rr.ok) { show('切换失败：' + rr.error, false); return; }
+            show('数据目录已换到：' + rr.dataDir + '（搬了 ' + (rr.moved || 0) + ' 项）', true);
+            await savesRefresh();
+        };
+        pick.querySelectorAll('[data-dd]').forEach(b => { b.onclick = () => apply(b.getAttribute('data-dd')); });
+        document.getElementById('svDataCancel').onclick = () => { pick.style.display = 'none'; };
+        document.getElementById('svDataApply').onclick = () => {
+            const v = (document.getElementById('svDataCustom').value || '').trim();
+            if (!v) { show('先填一个路径', false); return; }
+            apply(v);
+        };
+    };
     box.querySelectorAll('[data-bk]').forEach(btn => {
         btn.onclick = async () => {
             const [kind, name] = btn.dataset.bk.split('|');

@@ -30,53 +30,121 @@ const { analyze, classify, loadEnabledIds, detectSeries, GAME_VERSION,
 // 配置路径随探测结果变化，每次现取（支持运行时重新检测 / 手动改路径）
 function configPath() { return path.join(getPaths().GAME, 'config_player.xml'); }
 // ---------- 用户数据目录 ----------
-// 程序目录（dist / 安装目录）每次更新版本、重新打包都会被整个重建，
-// 所以「存档备份 / mod 方案存档 / 配置回滚历史 / 译文 / 版本基线」一律放在
-// %LOCALAPPDATA%\潜渊症Mod管理器数据（可用环境变量 BARO_DATA 改到别处），
-// 这样升级版本、重装、重打包都不会再碰到用户数据。
-const DATA_DIR = (function () {
-    const env = (process.env.BARO_DATA || '').trim();
-    const base = process.env.LOCALAPPDATA || process.env.APPDATA || os.tmpdir();
-    const dir = env || path.join(base, '潜渊症Mod管理器数据');
-    try { fs.mkdirSync(dir, { recursive: true }); return dir; }
-    catch (e) { return __dirname; }   // 建不了就退回程序目录，至少还能用
-})();
+// 程序目录（dist / 安装目录）每次更新版本、重新打包都会被整个重建，所以「存档备份 / mod 方案存档 /
+// 配置回滚历史 / 译文 / 版本基线」一律不放在程序目录里。
+// 默认也不放 C 盘：自动挑一个非系统盘（剩余空间最大的那个）建「潜渊症Mod管理器数据」；
+// 想放哪都行 —— 设环境变量 BARO_DATA，或在界面「存档管理 → 更换数据目录」里指定。
+const DATA_DIR_NAME = '潜渊症Mod管理器数据';
+const REG_KEY = 'HKCU\\Software\\潜渊症Mod管理器';
 
-// 老版本把数据放在程序目录里，第一次用新版本时搬过去（只搬不删，原处留着当备份）
-(function migrateUserData() {
-    if (DATA_DIR === __dirname) return;
-    const items = [
-        { name: 'versions.json', dir: false }, { name: 'translations.json', dir: false },
-        { name: 'user_zh.json', dir: false }, { name: 'share.json', dir: false },
-        { name: 'modsize.json', dir: false },
-        { name: 'presets', dir: true }, { name: 'savebackups', dir: true },
-        { name: 'confighistory', dir: true }, { name: 'exported_mods', dir: true },
-        { name: '导出的mod', dir: true },
-    ];
-    const cpDir = (src, dst) => {
-        fs.mkdirSync(dst, { recursive: true });
-        for (const e of fs.readdirSync(src, { withFileTypes: true })) {
-            const a = path.join(src, e.name), b = path.join(dst, e.name);
-            if (e.isDirectory()) cpDir(a, b);
-            else { try { fs.copyFileSync(a, b); } catch (err) { } }
+function regGetDataDir() {
+    try {
+        const out = execSync('reg query "' + REG_KEY + '" /v DataDir', { windowsHide: true, timeout: 4000 }).toString();
+        const m = out.match(/DataDir\s+REG_SZ\s+(.+)/);
+        return m ? m[1].trim() : '';
+    } catch (e) { return ''; }
+}
+function regSetDataDir(dir) {
+    try {
+        execSync('reg add "' + REG_KEY + '" /v DataDir /t REG_SZ /d "' + dir + '" /f', { windowsHide: true, timeout: 4000 });
+        return true;
+    } catch (e) { return false; }
+}
+
+// 列出固定磁盘（带剩余空间），系统盘排最后 —— 给自动选择和界面候选列表用
+function candidateDrives() {
+    const out = [];
+    try {
+        const txt = execSync('wmic logicaldisk where "drivetype=3" get caption,freespace /value', { windowsHide: true, timeout: 8000 }).toString();
+        txt.split(/\r?\n\s*\r?\n/).forEach(b => {
+            const cap = (b.match(/Caption=([A-Za-z]:)/) || [])[1];
+            const free = (b.match(/FreeSpace=(\d+)/) || [])[1];
+            if (cap) out.push({ drive: cap.toUpperCase(), free: free ? Number(free) : 0, dir: path.join(cap.toUpperCase() + '\\', DATA_DIR_NAME) });
+        });
+    } catch (e) { }
+    if (!out.length) {
+        for (let c = 68; c <= 90; c++) {   // D..Z
+            const L = String.fromCharCode(c);
+            if (fs.existsSync(L + ':\\')) out.push({ drive: L + ':', free: 0, dir: path.join(L + ':\\', DATA_DIR_NAME) });
         }
-    };
-    items.forEach(it => {
-        const src = path.join(__dirname, it.name);
+    }
+    const sys = (process.env.SystemDrive || 'C:').toUpperCase();
+    return out.sort((a, b) => {
+        if ((a.drive === sys) !== (b.drive === sys)) return a.drive === sys ? 1 : -1;
+        return b.free - a.free;
+    });
+}
+
+function resolveDataDir() {
+    const tryMk = d => { try { fs.mkdirSync(d, { recursive: true }); return d; } catch (e) { return ''; } };
+    const env = (process.env.BARO_DATA || '').trim();
+    if (env) { const r = tryMk(env); if (r) return r; }
+    const saved = regGetDataDir();
+    if (saved) { const r = tryMk(saved); if (r) return r; }
+    for (const c of candidateDrives()) { const r = tryMk(c.dir); if (r) return r; }   // 优先非系统盘
+    const sysDir = path.join(process.env.LOCALAPPDATA || process.env.APPDATA || os.tmpdir(), DATA_DIR_NAME);
+    const r2 = tryMk(sysDir);
+    if (r2) return r2;
+    return __dirname;   // 都建不了就退回程序目录，至少还能用
+}
+
+let DATA_DIR, TRANS, USER_ZH, SIZE_CACHE, VERSIONS, SHARE_FILE, PRESET_DIR, BACKUP_ROOT, EXPORT_DIR;
+function applyDataDir(dir) {
+    DATA_DIR = dir;
+    TRANS = path.join(dir, 'translations.json');
+    USER_ZH = path.join(dir, 'user_zh.json');
+    SIZE_CACHE = path.join(dir, 'modsize.json');
+    VERSIONS = path.join(dir, 'versions.json');
+    SHARE_FILE = path.join(dir, 'share.json');
+    PRESET_DIR = path.join(dir, 'presets');
+    BACKUP_ROOT = path.join(dir, 'savebackups');
+    EXPORT_DIR = path.join(dir, 'exported_mods');
+}
+applyDataDir(resolveDataDir());
+console.log('数据目录：' + DATA_DIR);
+
+// ---------- 旧位置的数据搬过来（只复制不删除，原处留着当备份） ----------
+const USER_DATA_ITEMS = [
+    { name: 'versions.json', dir: false }, { name: 'translations.json', dir: false },
+    { name: 'user_zh.json', dir: false }, { name: 'share.json', dir: false },
+    { name: 'modsize.json', dir: false },
+    { name: 'presets', dir: true }, { name: 'savebackups', dir: true },
+    { name: 'confighistory', dir: true }, { name: 'exported_mods', dir: true },
+    { name: '导出的mod', dir: true },
+];
+function copyDirInto(src, dst) {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+        const a = path.join(src, e.name), b = path.join(dst, e.name);
+        if (e.isDirectory()) copyDirInto(a, b);
+        else { try { fs.copyFileSync(a, b); } catch (err) { } }
+    }
+}
+function migrateUserData(from) {
+    if (!from || path.resolve(from) === path.resolve(DATA_DIR)) return 0;
+    let n = 0;
+    USER_DATA_ITEMS.forEach(it => {
+        const src = path.join(from, it.name);
         const dst = path.join(DATA_DIR, it.name);
         if (!fs.existsSync(src) || fs.existsSync(dst)) return;
         try {
-            if (it.dir) cpDir(src, dst);
-            else fs.copyFileSync(src, dst);
+            if (it.dir) copyDirInto(src, dst); else fs.copyFileSync(src, dst);
+            n++;
             console.log('用户数据已迁移：' + src + ' -> ' + dst);
         } catch (e) { console.log('迁移失败（忽略）：' + it.name + ' — ' + e.message); }
     });
-})();
+    return n;
+}
+
+// 老版本把数据放在程序目录里，上一版默认位置是 %LOCALAPPDATA%（C 盘）—— 两个都扫一遍
+if (DATA_DIR !== __dirname) {
+    migrateUserData(__dirname);
+    const legacy = path.join(process.env.LOCALAPPDATA || process.env.APPDATA || '', DATA_DIR_NAME);
+    if (legacy && fs.existsSync(legacy)) migrateUserData(legacy);
+}
 
 const UI = path.join(__dirname, 'ui.html');
-const TRANS = path.join(DATA_DIR, 'translations.json');
 const ZH_PATH = path.join(__dirname, 'zh.json');
-const USER_ZH = path.join(DATA_DIR, 'user_zh.json');
 const OLLAMA = 'http://127.0.0.1:11434';
 const MODEL = 'qwen25-14b-8k';
 const PORT_START = 9182;
@@ -287,7 +355,6 @@ function sortByPinyin(arr) {
     return arr;
 }
 // ---------- mod 体积缓存（首次扫描后落盘，之后按 id+版本 复用）----------
-const SIZE_CACHE = path.join(DATA_DIR, 'modsize.json');
 let __sizeCache = null, __sizeDirty = false;
 function loadSizeCache() {
     if (__sizeCache) return __sizeCache;
@@ -593,7 +660,6 @@ function fillDeps(mods) {
 }
 
 // ---------- mod 更新检测（离线：对比本机会话的版本快照）----------
-const VERSIONS = path.join(DATA_DIR, 'versions.json');
 
 function loadVersions() {
     try { return JSON.parse(fs.readFileSync(VERSIONS, 'utf8')); } catch (e) { return null; }
@@ -776,7 +842,6 @@ function openAppWindow(u) {
 function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
 
 // ---------- 共享文件夹（导出/导入 mod 目录）----------
-const SHARE_FILE = path.join(DATA_DIR, 'share.json');
 function loadShare() { try { return JSON.parse(fs.readFileSync(SHARE_FILE, 'utf8')); } catch (e) { return {}; } }
 function saveShare(o) { fs.writeFileSync(SHARE_FILE, JSON.stringify(o, null, 2), 'utf8'); }
 function __escShare(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -786,7 +851,7 @@ function __isWs(id) { return /^[0-9]{5,}$/.test(String(id == null ? '' : id).tri
 function __normName(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^0-9a-z\u4e00-\u9fa5]/g, ''); }
 // 默认就放在软件自己的文件夹里
 function defaultShareFolder() {
-    const nw = path.join(DATA_DIR, 'exported_mods');
+    const nw = EXPORT_DIR;
     const old = path.join(DATA_DIR, '导出的mod');
     try { if (!fs.existsSync(nw) && fs.existsSync(old)) fs.renameSync(old, nw); } catch (e) { }
     return nw;
@@ -795,7 +860,6 @@ function defaultShareFolder() {
 function resolveShareFolder(f) { return (f && String(f).trim()) || loadShare().folder || defaultShareFolder(); }
 
 // ---------- mod 方案存档：一套启用列表存一个文件，换存档时来回切换 ----------
-const PRESET_DIR = path.join(DATA_DIR, 'presets');
 function __presetFile(name) {
     const n = String(name == null ? '' : name).replace(/[\\/:*?"<>|]/g, '_').replace(/^\s+|\s+$/g, '').replace(/^\.+$/, '_');
     if (!n) return '';
@@ -1055,7 +1119,6 @@ const server = http.createServer((req, res) => {
     // ---------- 存档管理 ----------
     // 单人存档在游戏存档根目录（*.save），多人存档在 Multiplayer 子目录里；
     // 一个存档槽 = <名字>.save + 可选的 <名字>_CharacterData.xml
-    const BACKUP_ROOT = path.join(DATA_DIR, 'savebackups');
 
     function saveDirs() {
         const inst = getPaths().INSTALLED;
@@ -1247,6 +1310,38 @@ const server = http.createServer((req, res) => {
         } catch (e) {
             send(res, 500, JSON.stringify({ ok: false, error: e.message }));
         }
+        return;
+    }
+
+    // 数据目录：现在在哪、还能换到哪
+    if (url === '/api/datadir') {
+        send(res, 200, JSON.stringify({
+            ok: true, dataDir: DATA_DIR,
+            fromEnv: !!((process.env.BARO_DATA || '').trim()),
+            candidates: candidateDrives().map(c => ({ drive: c.drive, dir: c.dir, freeGB: Math.round(c.free / 1073741824) })),
+        }));
+        return;
+    }
+    if (url === '/api/datadir/set' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw) || {};
+                let dir = String(b.dir || '').trim();
+                if (!dir) { send(res, 400, JSON.stringify({ ok: false, error: '没填目录' })); return; }
+                dir = path.resolve(dir);
+                try {
+                    fs.mkdirSync(dir, { recursive: true });
+                    const probe = path.join(dir, '.write_test');
+                    fs.writeFileSync(probe, '1'); fs.unlinkSync(probe);
+                } catch (e) { send(res, 400, JSON.stringify({ ok: false, error: '这个目录建不了或没权限写：' + e.message })); return; }
+                const moved = migrateUserData(DATA_DIR);   // 旧目录的东西搬过去（只复制，不删旧的）
+                applyDataDir(dir);
+                const saved = regSetDataDir(dir);
+                send(res, 200, JSON.stringify({ ok: true, dataDir: DATA_DIR, moved, saved }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
         return;
     }
 
@@ -1470,7 +1565,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                         zipPath = path.join(outDir, 'BarotraumaMods-' + count + 'mods-' + tag + '.zip');
                         // 只留最新这一包，免得越攒越多
                         // 只清自己生成过的 zip；outDir 是用户目录时不扫不删，避免误删别人的文件
-                        const defExp = path.resolve(path.join(DATA_DIR, 'exported_mods'));
+                        const defExp = path.resolve(EXPORT_DIR);
                         const canClean = path.resolve(outDir) === defExp || path.resolve(outDir) === path.resolve(__dirname);
                         if (canClean) {
                             try {
