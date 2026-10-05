@@ -5,80 +5,49 @@
 <link rel="icon" type="image/png" href="/icon.png">
 <title>潜渊症 Mod 管理</title>
 <style>
-body{background:#0f1219;color:#e6e9ef;font-family:"Microsoft YaHei",sans-serif;margin:0;padding:20px 22px}
-h1{font-size:18px;margin:0 0 4px}
-.sub{color:#8b94a8;font-size:12.5px;margin-bottom:14px}
-.bar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
-button{background:#1c2434;color:#e6e9ef;border:1px solid #2a3346;border-radius:9px;
-  padding:8px 15px;font-size:13px;cursor:pointer;font-family:inherit}
-button:hover{border-color:#6366f1}
-button.primary{background:linear-gradient(135deg,#6366f1,#8b5cf6);border:none;font-weight:600}
+*{box-sizing:border-box}
+body{background:#0b0e14;color:#e6e9ef;font-family:"Microsoft YaHei","PingFang SC",sans-serif;margin:0;padding:0 22px 40px}
+body::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:radial-gradient(1100px 520px at 18% -12%,#1a2133 0%,rgba(11,14,20,0) 65%),
+             radial-gradient(900px 460px at 92% 4%,#1b1730 0%,rgba(11,14,20,0) 60%)}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#2a3346;border-radius:6px}
+::-webkit-scrollbar-thumb:hover{background:#3b4763}
+::-webkit-scrollbar-track{background:transparent}
+:focus-visible{outline:2px solid #818cf8;outline-offset:1px}
+
+/* ---------- 顶栏 ---------- */
+.topbar{position:sticky;top:0;z-index:30;margin:0 -22px 16px;padding:14px 22px 12px;
+  background:rgba(11,14,20,.9);backdrop-filter:blur(10px);border-bottom:1px solid #1d2536}
+h1{font-size:19px;margin:0;font-weight:700;letter-spacing:.4px}
+h1 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:9px;
+  background:linear-gradient(135deg,#6366f1,#22d3ee);vertical-align:middle;box-shadow:0 0 10px rgba(99,102,241,.7)}
+.sub{color:#8b94a8;font-size:12.5px;margin:4px 0 0}
+.kbd{display:inline-block;background:#161e2e;border:1px solid #27314a;border-radius:5px;
+  padding:0 5px;margin:0 1px;font-size:11px;color:#a5b4fc;font-family:Consolas,monospace}
+
+/* ---------- 工具栏 ---------- */
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.grp{display:flex;gap:6px;align-items:center;padding:4px 9px;background:#111725;
+  border:1px solid #1f2739;border-radius:12px}
+.grp>.glabel{color:#5b657d;font-size:11px;margin-right:2px;user-select:none;letter-spacing:.5px}
+button{background:#19202f;color:#e6e9ef;border:1px solid #27314a;border-radius:9px;
+  padding:7px 13px;font-size:12.5px;cursor:pointer;font-family:inherit;
+  transition:background .13s,border-color .13s,transform .06s,box-shadow .13s}
+button:hover{border-color:#6366f1;background:#1e2740}
+button:active{transform:translateY(1px)}
+button.primary{background:linear-gradient(135deg,#6366f1,#8b5cf6);border:none;font-weight:600;
+  box-shadow:0 4px 14px rgba(99,102,241,.35);padding:7px 16px}
+button.primary:hover{filter:brightness(1.08)}
 button:disabled{opacity:.5;cursor:not-allowed}
-.quit{background:#3b1d24;color:#f87171;margin-left:auto}
-.cols{display:flex;gap:20px;align-items:flex-start}
-.col{flex:1;min-width:0;background:#131926;border:1px solid #222b3d;border-radius:12px;padding:12px}
-.col h2{font-size:14px;margin:0 0 4px}
-.col h2 span{color:#8b94a8;font-size:12px;font-weight:normal;margin-left:6px}
-.hint{color:#6b7590;font-size:11.5px;margin-bottom:8px}
-ul{list-style:none;margin:0;padding:0;min-height:60px}
-li{display:flex;align-items:center;gap:9px;padding:7px 8px;margin-bottom:5px;
-  background:#182032;border:1px solid #232c40;border-radius:8px;cursor:default}
-li:hover{background:#1d263a}
-li.drag{opacity:.45}
-li.over{border-color:#6366f1}
-.grip{color:#5a6479;cursor:grab;font-size:15px;user-select:none}
-.idx{color:#8b94a8;font-size:11.5px;width:20px;text-align:right;flex-shrink:0}
-.info{flex:1;min-width:0}
-.nm{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.meta{color:#6b7590;font-size:11px;margin-top:1px}
-.dsc{color:#8b94a8;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tog{flex-shrink:0;padding:4px 10px;font-size:11.5px}
-.tr2{background:#1c2c3a;color:#7dd3fc}
-.tagd{background:#4a1a1e;color:#f87171;font-size:10.5px;padding:1px 6px;border-radius:8px}
-.tagw{background:#4a3a12;color:#fbbf24;font-size:10.5px;padding:1px 6px;border-radius:8px}
-.filldep{background:#3f2d10;color:#fbbf24}
-.msg{padding:9px 13px;border-radius:8px;font-size:12.5px;margin-bottom:12px;display:none}
-.msg.ok{background:#12261c;border-left:3px solid #4ade80;display:block}
-.msg.err{background:#2a1618;border-left:3px solid #f87171;display:block}
-.report{display:none;margin-bottom:14px;padding:12px 14px;border-radius:10px;font-size:12.5px;line-height:1.6;
-  background:#131926;border:1px solid #222b3d}
-.report.ok{border-left:3px solid #4ade80}
-.report.warn{border-left:3px solid #f5c451}
-.report.danger{border-left:3px solid #f87171}
-.report h3{margin:0 0 6px;font-size:13.5px}
-.report ul{margin:4px 0 4px 18px}
-.report li{margin:2px 0}
-.report .sev{font-weight:600}
-.report .sev.c{color:#f87171}
-.report .sev.w{color:#f5c451}
-.report .sev.i{color:#7dd3fc}
-.rcols{display:flex;gap:22px;align-items:flex-start;margin-top:6px}
-.rcol{flex:1;min-width:0}
-.rright{border-left:1px solid #222b3d;padding-left:18px}
-@media(max-width:900px){.rcols{flex-direction:column}.rright{border-left:none;padding-left:0;border-top:1px solid #222b3d;padding-top:10px}}
-.lnk{color:#a5b4fc;font-size:12.5px;text-decoration:none;padding:7px 11px;
-  border:1px solid #2a3346;border-radius:9px}
-.lnk:hover{border-color:#6366f1}
-.go{color:#7dd3fc;text-decoration:none;font-size:13px;padding:3px 7px;flex-shrink:0}
-.go:hover{color:#a5b4fc}
-.cn{color:#4ade80}
-.paths{display:none;margin-bottom:14px;padding:12px 14px;border-radius:10px;
-  background:#131926;border:1px solid #222b3d;font-size:12.5px}
-.paths.show{display:block}
-.ptitle{font-size:13.5px;font-weight:600;margin-bottom:8px}
-.ptitle span{color:#8b94a8;font-size:11.5px;font-weight:normal;margin-left:8px}
-.prow{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.plabel{width:76px;color:#8b94a8;flex-shrink:0}
-.prow input{flex:1;min-width:0;background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;
-  border-radius:7px;padding:6px 9px;font-size:12px;font-family:inherit}
-.prow input:focus{outline:none;border-color:#6366f1}
-.pok{flex-shrink:0;font-size:11.5px;width:52px}
-.pbtns{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px}
-.mtag{color:#f5c451;font-size:11.5px;font-weight:normal;margin-left:6px}
-/* 搜索框 */
-.sbox{display:flex;align-items:center;background:#0f1626;border:1px solid #2a3346;
-  border-radius:9px;padding:0 3px 0 11px;width:250px;flex-shrink:0}
-.sbox:focus-within{border-color:#6366f1}
+button.quit{background:#3b1d24;color:#f87171;border-color:#5c2b36;margin-left:auto}
+button.quit:hover{background:#4d252e;border-color:#a33d4b}
+.spacer{flex:1;min-width:6px}
+
+/* ---------- 搜索 / 统计 ---------- */
+.sbox{display:flex;align-items:center;background:#0f1626;border:1px solid #27314a;
+  border-radius:10px;padding:0 4px 0 12px;width:260px;flex-shrink:0;transition:border-color .13s,box-shadow .13s}
+.sbox:focus-within{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.16)}
 .sbox input{flex:1;min-width:0;background:transparent;border:none;outline:none;
   color:#e6e9ef;font-size:12.5px;font-family:inherit;padding:7px 0}
 .sbox input::placeholder{color:#5a6479}
@@ -86,46 +55,162 @@ li.over{border-color:#6366f1}
   padding:2px 8px;line-height:1;font-family:inherit}
 .sbox button:hover{color:#f87171}
 .sbox.has{border-color:#6366f1}
-.empty{display:block;color:#5a6479;font-size:12px;padding:10px 8px;
-  background:none;border:none;cursor:default}
-.empty:hover{background:none}
+#stat{display:inline-flex;align-items:center;background:#111725;border:1px solid #1f2739;
+  border-radius:20px;padding:5px 12px;color:#8b94a8;font-size:12px}
+
+/* ---------- 提示条 / 报告 ---------- */
+.msg{padding:10px 14px;border-radius:10px;font-size:12.5px;margin-bottom:12px;display:none;
+  border:1px solid transparent;box-shadow:0 6px 18px rgba(0,0,0,.22)}
+.msg.ok{background:#12261c;border-color:#26583c;display:block}
+.msg.err{background:#2a1618;border-color:#7a3038;display:block}
+.report{display:none;margin-bottom:14px;padding:14px 16px;border-radius:12px;font-size:12.5px;
+  line-height:1.65;background:#111725;border:1px solid #1f2739;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.report.ok{border-left:3px solid #4ade80}
+.report.warn{border-left:3px solid #f5c451}
+.report.danger{border-left:3px solid #f87171}
+.report h3{margin:0 0 8px;font-size:13.5px;font-weight:600}
+.report ul{margin:6px 0 6px 18px;min-height:0}
+.report li{margin:3px 0;background:none;border:none;padding:0}
+.report li:hover{background:none}
+.report .sev{font-weight:600}
+.report .sev.c{color:#f87171}
+.report .sev.w{color:#f5c451}
+.report .sev.i{color:#7dd3fc}
+.rcols{display:flex;gap:22px;align-items:flex-start;margin-top:8px}
+.rcol{flex:1;min-width:0}
+.rright{border-left:1px solid #1f2739;padding-left:18px}
+@media(max-width:900px){.rcols{flex-direction:column}.rright{border-left:none;padding-left:0;border-top:1px solid #1f2739;padding-top:10px}}
+.lnk{color:#a5b4fc;font-size:12.5px;text-decoration:none;padding:7px 11px;
+  border:1px solid #27314a;border-radius:9px}
+.lnk:hover{border-color:#6366f1;background:#151d2e}
+
+/* ---------- 两栏 ---------- */
+.cols{display:flex;gap:18px;align-items:flex-start}
+.col{flex:1;min-width:0;background:#111725;border:1px solid #1f2739;border-radius:14px;
+  padding:12px 12px 10px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+.chead{display:flex;align-items:center;gap:9px;margin-bottom:3px}
+.ctitle{font-size:14px;font-weight:600;display:flex;align-items:center;gap:7px}
+.cnum{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;
+  border-radius:7px;font-size:12px;background:#1d2740;color:#a5b4fc}
+.cnt{color:#8b94a8;font-size:11.5px;font-weight:400;background:#161e2e;border:1px solid #222c40;
+  border-radius:20px;padding:1px 9px}
+.chead .btns{margin-left:auto;display:flex;gap:6px}
+.colbtn{background:#2b3550;color:#e6e9ef;border:1px solid #3a4562;border-radius:8px;
+  padding:5px 13px;font-size:12.5px;cursor:pointer;font-family:inherit;transition:filter .13s,border-color .13s}
+.colbtn.en{background:#1e5c46;border-color:#2c8a63;color:#eafff6}
+.colbtn.en:hover{filter:brightness(1.18)}
+.colbtn.dg{background:#5c2333;border-color:#8a3350;color:#ffeef2}
+.colbtn.dg:hover{filter:brightness(1.18)}
+.colbtn:disabled{opacity:.5;cursor:default}
+.hint{color:#6b7590;font-size:11.5px;margin-bottom:8px;line-height:1.5}
+
+ul{list-style:none;margin:0;padding:0 4px 0 0;min-height:70px;
+  max-height:calc(100vh - 330px);overflow:auto}
+@media(max-width:1000px){ul{max-height:none}}
+li{display:flex;align-items:center;gap:9px;padding:8px 10px;margin-bottom:6px;
+  background:#161d2c;border:1px solid #212a3e;border-radius:10px;cursor:default;
+  transition:background .13s,border-color .13s,box-shadow .13s}
+li:hover{background:#1c2437;border-color:#33405f;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+li.drag{opacity:.45}
+li.over{border-color:#6366f1;box-shadow:inset 3px 0 0 #6366f1}
+.grip{color:#4d5670;cursor:grab;font-size:15px;user-select:none;flex-shrink:0}
+li:hover .grip{color:#8b94a8}
+.idx{color:#8b94a8;font-size:11.5px;width:20px;text-align:right;flex-shrink:0}
+.info{flex:1;min-width:0}
+.nm{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{color:#6b7590;font-size:11px;margin-top:3px}
+.dsc{color:#8b94a8;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tagd{background:#4a1a1e;color:#f87171;font-size:10.5px;padding:1px 6px;border-radius:8px}
+.tagw{background:#4a3a12;color:#fbbf24;font-size:10.5px;padding:1px 6px;border-radius:8px}
+/* 分类色标：①~⑧ 各一个颜色，一眼看出分层 */
+.catb{display:inline-block;font-size:10.5px;padding:1px 8px;border-radius:20px;margin-right:6px;border:1px solid transparent}
+.ct1{background:#16324f;color:#93c5fd;border-color:#25507d}
+.ct2{background:#322a55;color:#c4b5fd;border-color:#4b3f80}
+.ct3{background:#123f37;color:#6ee7b7;border-color:#1c6558}
+.ct4{background:#3f3812;color:#fcd34d;border-color:#5f551d}
+.ct5{background:#123a4f;color:#7dd3fc;border-color:#1d5a78}
+.ct6{background:#46290f;color:#fdba74;border-color:#6e4019}
+.ct7{background:#3a1f3f;color:#f0abfc;border-color:#5c2f63}
+.ct8{background:#3f2626;color:#fca5a5;border-color:#5f3636}
+.tog{flex-shrink:0;padding:4px 10px;font-size:11.5px}
+.tr2{background:#1c2c3a;color:#7dd3fc;border-color:#26445c}
+.filldep{background:#3f2d10;color:#fbbf24;border-color:#5f4519}
+.tgs{background:#243050;color:#c7d2fe;border-color:#33456e}
+.go{color:#7dd3fc;text-decoration:none;font-size:12px;padding:3px 7px;flex-shrink:0;border-radius:7px}
+.go:hover{color:#a5b4fc;background:#151d2e}
+.cn{color:#4ade80}
+/* 上下移：悬停才显示，避免平时占空间 */
+.moves{display:flex;flex-direction:column;gap:2px;flex-shrink:0;opacity:0;transition:opacity .13s}
+li:hover .moves{opacity:1}
+.mv{background:transparent;border:1px solid #27314a;color:#8b94a8;font-size:11px;
+  padding:0 5px;line-height:15px;border-radius:6px;min-width:20px}
+.mv:hover{color:#fff;border-color:#6366f1;background:#1e2740}
+.empty{display:flex;align-items:center;justify-content:center;color:#5a6479;font-size:12px;
+  padding:18px 8px;background:none;border:1px dashed #263049;border-radius:10px;cursor:default}
+.empty:hover{background:none;box-shadow:none}
 .hit{background:#6366f1;color:#fff;border-radius:3px;padding:0 2px}
+
+/* ---------- 路径设置 ---------- */
+.paths{display:none;margin-bottom:14px;padding:14px 16px;border-radius:12px;
+  background:#111725;border:1px solid #1f2739;font-size:12.5px}
+.paths.show{display:block}
+.ptitle{font-size:13.5px;font-weight:600;margin-bottom:10px}
+.ptitle span{color:#8b94a8;font-size:11.5px;font-weight:normal;margin-left:8px}
+.prow{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.plabel{width:76px;color:#8b94a8;flex-shrink:0}
+.prow input{flex:1;min-width:0;background:#0f1626;color:#e6e9ef;border:1px solid #27314a;
+  border-radius:8px;padding:7px 10px;font-size:12px;font-family:inherit}
+.prow input:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.15)}
+.pok{flex-shrink:0;font-size:11.5px;width:52px}
+.pbtns{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.mtag{color:#f5c451;font-size:11.5px;font-weight:normal;margin-left:6px}
 
 @media(max-width:1000px){.cols{flex-direction:column}}
 @media(max-width:760px){.sbox{width:100%;order:-1}}
 </style>
 </head>
 <body>
-<h1>潜渊症 Mod 管理</h1>
-<div class="sub">拖拽调整顺序 · 点击按钮启用/停用 · 保存后直接写入游戏配置</div>
+<div class="topbar">
+<h1><span class="dot"></span>潜渊症 Mod 管理</h1>
+<div class="sub">拖拽调整顺序 · 点击按钮启用/停用 · 保存后直接写入游戏配置　<span class="kbd">Ctrl+S</span> 保存　<span class="kbd">/</span> 搜索　<span class="kbd">Esc</span> 清除搜索</div>
 
 <div class="bar">
-  <button class="primary" id="save">保存到游戏</button>
-  <button id="resort">重新排序</button>
-  <button id="test">启动游戏</button>
-  <button id="joinCheck">联机自检</button>
-  <button id="reload">扫描路径</button>
-  <button id="updates">检查更新</button>
-  <button id="paths">路径设置</button>
-  <button id="exportMods">导出mod文件</button>
-  <button id="openFolder">打开文件夹</button>
-  <button id="importMods">导入mod文件</button>
-  <button id="btnSubLink">订阅链接</button>
-  <button id="importZip">导入zip包</button>
-  <input type="file" id="zipFile" accept=".zip" style="display:none">
-  <button id="btnPresets">mod方案存档</button>
-  <button id="btnSaves">存档管理</button>
-  <button id="btnOv" title="查看已启用 mod 之间谁覆盖了谁，可一键换顺序">覆盖关系</button>
-  <button id="btnHist" title="每次保存前的配置备份，可一键回滚">配置回滚</button>
-  <button id="tr">翻译名称（本地 AI）</button>
+  <span class="grp"><span class="glabel">主操作</span>
+    <button class="primary" id="save" title="把左栏顺序写入游戏配置（Ctrl+S）">保存到游戏</button>
+    <button id="resort" title="按分层规则重新排一遍左栏">重新排序</button>
+    <button id="test" title="直接启动游戏（保存后）">启动游戏</button>
+    <button id="joinCheck" title="检查重复 mod、缺前置、版本不符、多人同步">联机自检</button>
+  </span>
+  <span class="grp"><span class="glabel">体检</span>
+    <button id="updates" title="对比上次快照，看哪些 mod 更新了">检查更新</button>
+    <button id="btnOv" title="查看已启用 mod 之间谁覆盖了谁，可一键换顺序">覆盖关系</button>
+    <button id="btnHist" title="每次保存前的配置备份，可一键回滚">配置回滚</button>
+    <button id="reload" title="重新扫描已安装 / 本地 mod">扫描路径</button>
+    <button id="paths" title="游戏目录、创意工坊、本地 mod 目录、导出目录">路径设置</button>
+  </span>
+  <span class="grp"><span class="glabel">导入导出</span>
+    <button id="exportMods" title="把选中的 mod 打包导出">导出mod文件</button>
+    <button id="importMods" title="从导出的文件夹导入 mod">导入mod文件</button>
+    <button id="importZip" title="导入 zip 包（可含订阅链接）">导入zip包</button>
+    <input type="file" id="zipFile" accept=".zip" style="display:none">
+    <button id="btnSubLink" title="生成 / 导入创意工坊订阅链接">订阅链接</button>
+    <button id="btnPresets" title="把当前这套启用组合存成方案，随时切回">mod方案存档</button>
+    <button id="btnSaves" title="游戏存档备份 / 还原">存档管理</button>
+    <button id="openFolder" title="打开导出文件夹">打开文件夹</button>
+  </span>
+  <span class="grp"><span class="glabel">其他</span>
+    <button id="tr" title="用本地 AI 给 mod 补中文名和简介">翻译名称（本地 AI）</button>
+  </span>
+  <span class="spacer"></span>
   <span class="sbox" id="sBox">
-    <input id="search" placeholder="搜索 mod：名称 / 中文名 / 分类 / ID" spellcheck="false" autocomplete="off">
+    <input id="search" placeholder="搜索：名称 / 中文名 / 分类 / ID（空格分隔多个词）" spellcheck="false" autocomplete="off">
     <button id="sclear" title="清除搜索（Esc）">×</button>
   </span>
   <a class="lnk" href="https://steamcommunity.com/app/602960/workshop/" target="_blank">创意工坊 ↗</a>
   <a class="lnk" href="https://steamcommunity.com/my/myworkshopfiles/?appid=602960" target="_blank">我的订阅 ↗</a>
   <span class="hint" id="stat"></span>
   <button id="quit" class="quit" title="先保存到游戏，再关闭程序并退出后台服务">保存退出</button>
+</div>
 </div>
 
 <div class="msg" id="msg"></div>
@@ -156,14 +241,19 @@ li.over{border-color:#6366f1}
 </div>
 
 <div class="cols">
-  <style>h2{display:flex;align-items:center;gap:8px}h2 span{flex:0 0 auto}h2 .btns{margin-left:auto;display:flex;gap:8px}h2 .colbtn{background:#303a52;color:#e6e9ef;border:1px solid #3b465f;border-radius:7px;padding:5px 14px;font-size:12.5px;cursor:pointer;font-family:inherit}h2 .colbtn.en{background:#1e5c46;border-color:#2c8a63;color:#eafff6}h2 .colbtn.en:hover{background:#267a5c}h2 .colbtn.dg{background:#5c2333;border-color:#8a3350;color:#ffeef2}h2 .colbtn.dg:hover{background:#7a2f43}h2 .colbtn:disabled{opacity:.5;cursor:default}</style>
   <div class="col">
-    <h2>① 已启用<span id="ca"></span><span class="btns"><button id="enableAllTop" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用全部</button><button id="clearMods" class="colbtn dg" title="全部停用并写入游戏配置">清空</button></span></h2>
-    <div class="hint">列表从上到下加载，越靠下优先级越高</div>
+    <div class="chead">
+      <div class="ctitle"><span class="cnum">①</span>已启用<span class="cnt" id="ca"></span></div>
+      <span class="btns"><button id="enableAllTop" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用全部</button><button id="clearMods" class="colbtn dg" title="全部停用并写入游戏配置">清空</button></span>
+    </div>
+    <div class="hint">从上到下加载，<b>越靠下优先级越高</b> · 拖 ≡ 调顺序，或用悬停出现的 ↑↓ 微调</div>
     <ul id="activeList"></ul>
   </div>
   <div class="col">
-    <h2>② 未启用<span id="ci"></span><span class="btns"><button id="sortSize" class="colbtn" title="未启用列表在拼音 / 体积之间切换排序">按体积</button><button id="enableAll" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用</button></span></h2>
+    <div class="chead">
+      <div class="ctitle"><span class="cnum">②</span>未启用<span class="cnt" id="ci"></span></div>
+      <span class="btns"><button id="sortSize" class="colbtn" title="未启用列表在拼音 / 体积之间切换排序">按体积</button><button id="enableAll" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用</button></span>
+    </div>
     <div class="hint">不参与加载 · 按名称首字母拼音 A→Z 排列（左侧字母即首字母），启用后会自动插入左栏合适位置</div>
     <ul id="idleList"></ul>
   </div>
@@ -224,19 +314,31 @@ function makeItem(m, i, isActive){
     const danger = /csforbarotrauma/i.test(m.name) && !/luacs/i.test(m.name);
     const miss = isActive ? missingDeps(m) : [];
     const zhHtml = m.zh ? '<span class="cn">' + esc(m.zh) + '</span> ' : '';
+    const di = '①②③④⑤⑥⑦⑧'.indexOf(String(m.cat || '').charAt(0)) + 1;
     li.innerHTML =
-        '<span class="grip">≡</span>' +
+        '<span class="grip" title="拖动调整顺序">≡</span>' +
         '<span class="idx"' + (isActive ? '' : ' title="拼音首字母"') + '>' + (isActive ? (i + 1) : (m.py || '')) + '</span>' +
         '<div class="info"><div class="nm">' + zhHtml + esc(m.name) +
         (danger ? ' <span class="tagd">旧框架·建议停用</span>' : '') +
         (miss.length ? ' <span class="tagw" title="' + esc(miss.map(x => x.why).join('；')) + '">缺前置：' + esc(miss.map(x => x.name).join('、')) + '</span>' : '') +
-        '</div><div class="meta">' + esc(m.cat) + ' · v' + m.modversion + (m.sizeText ? (' · ' + m.sizeText + (m.files ? (' / ' + m.files + ' 文件') : '')) : '') + '</div>' +
+        '</div><div class="meta">' + (di ? '<span class="catb ct' + di + '">' + esc(m.cat) + '</span>' : esc(m.cat)) + ' · v' + m.modversion + (m.sizeText ? (' · ' + m.sizeText + (m.files ? (' / ' + m.files + ' 文件') : '')) : '') + '</div>' +
         (m.desc ? '<div class="dsc" title="' + esc(m.desc) + '">' + esc(m.desc) + '</div>' : '') +
         '</div>' +
-        '<a class="go" href="' + (m.workshop || '#') + '" target="_blank" rel="noopener">创意工坊 ↗</a>' +
+        '<a class="go" href="' + (m.workshop || '#') + '" target="_blank" rel="noopener" title="在创意工坊打开这个 mod">创意工坊 ↗</a>' +
+        (isActive ? '<span class="moves"><button class="mv" data-mv="-1" title="上移一位">↑</button><button class="mv" data-mv="1" title="下移一位">↓</button></span>' : '') +
         '<button class="tog tr2" title="手动补充/修改中文名与简介">译</button>' +
         (miss.length ? '<button class="tog filldep">补前置</button>' : '') +
         '<button class="tog tgs">' + (isActive ? '停用' : '启用') + '</button>';
+
+    li.querySelectorAll('[data-mv]').forEach(b => {
+        b.onclick = () => {
+            const k = active.findIndex(x => x.id === m.id);
+            const to = k + Number(b.dataset.mv);
+            if (k < 0 || to < 0 || to >= active.length) return;
+            active.splice(to, 0, active.splice(k, 1)[0]);
+            render();
+        };
+    });
 
     const fdep = li.querySelector('.filldep');
     if (fdep) fdep.onclick = () => {
@@ -346,8 +448,10 @@ function render(){
     // 序号仍用原始数组下标，这样搜索状态下也能看出它在真实加载顺序里的位置
     active.forEach((m, i) => { if (matchMod(m, ts)) { a.appendChild(makeItem(m, i, true)); na++; } });
     idle.forEach((m, i) => { if (matchMod(m, ts)) { b.appendChild(makeItem(m, i, false)); nb++; } });
-    if (ts.length && !na) a.innerHTML = '<li class="empty">没有匹配的 mod</li>';
-    if (ts.length && !nb) b.innerHTML = '<li class="empty">没有匹配的 mod</li>';
+    if (!active.length && !ts.length) a.innerHTML = '<li class="empty">左栏空着：在右栏点「启用」，或点「一键启用全部」</li>';
+    else if (ts.length && !na) a.innerHTML = '<li class="empty">左栏没有匹配「' + esc(query) + '」的 mod</li>';
+    if (!idle.length && !ts.length) b.innerHTML = '<li class="empty">右栏空着：所有 mod 都已启用</li>';
+    else if (ts.length && !nb) b.innerHTML = '<li class="empty">右栏没有匹配「' + esc(query) + '」的 mod</li>';
     document.getElementById('ca').textContent =
         ts.length ? (na + ' / ' + active.length + ' 个') : (active.length + ' 个');
     document.getElementById('ci').textContent =
@@ -383,6 +487,7 @@ document.getElementById('sclear').onclick = () => { setQuery(''); sInput.focus()
 document.addEventListener('keydown', e => {
     const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
     if (e.ctrlKey && e.key === 'f') { e.preventDefault(); sInput.focus(); sInput.select(); return; }
+    if (e.ctrlKey && (e.key === 's' || e.key === 'S')) { e.preventDefault(); document.getElementById('save').click(); return; }
     if (!typing && e.key === '/') { e.preventDefault(); sInput.focus(); }
 });
 
