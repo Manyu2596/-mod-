@@ -165,7 +165,64 @@ li:hover .moves{opacity:1}
 .pbtns{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
 .mtag{color:#f5c451;font-size:11.5px;font-weight:normal;margin-left:6px}
 
+/* 两栏之间的拖动条 */
+.csep{flex:0 0 10px;align-self:stretch;min-height:140px;cursor:col-resize;position:relative;user-select:none}
+.csep::after{content:'';position:absolute;left:4px;top:14%;bottom:14%;width:2px;border-radius:2px;background:#263049;transition:background .13s}
+.csep:hover::after,.csep.on::after{background:#6366f1;box-shadow:0 0 8px rgba(99,102,241,.6)}
+@media(max-width:1000px){.csep{display:none}}
+
 @media(max-width:1000px){.cols{flex-direction:column}}
+/* ---------- 浅色主题 ---------- */
+body.light{background:#f4f6fb;color:#1f2430}
+body.light::before{background:radial-gradient(1100px 520px at 18% -12%,#e9eef9 0%,rgba(244,246,251,0) 65%),
+  radial-gradient(900px 460px at 92% 4%,#efeaf8 0%,rgba(244,246,251,0) 60%)}
+body.light .topbar{background:rgba(244,246,251,.93);border-bottom-color:#dfe4ee}
+body.light .sub{color:#5b6478}
+body.light .grp{background:#fff;border-color:#dfe4ee}
+body.light .grp>.glabel{color:#7b8496}
+body.light button{background:#fff;color:#1f2430;border-color:#d3dae7}
+body.light button:hover{border-color:#6366f1;background:#eef1fb}
+body.light button.primary{color:#fff;border:none}
+body.light .sbox{background:#fff;border-color:#d3dae7}
+body.light .sbox input{color:#1f2430}
+body.light .sbox input::placeholder{color:#9aa3b5}
+body.light #stat{background:#fff;border-color:#dfe4ee;color:#5b6478}
+body.light .msg.ok{background:#e8f7ee;border-color:#9bd3b0;color:#14603a}
+body.light .msg.err{background:#fdecee;border-color:#e79aa4;color:#8a2230}
+body.light .report{background:#fff;border-color:#dfe4ee;color:#1f2430;box-shadow:0 8px 24px rgba(31,36,48,.08)}
+body.light .report .sev.i{color:#0e7490}
+body.light .rright{border-left-color:#e6eaf2}
+body.light .lnk{border-color:#d3dae7;color:#4f46e5}
+body.light .lnk:hover{background:#eef1fb}
+body.light .col{background:#fff;border-color:#dfe4ee;box-shadow:0 8px 24px rgba(31,36,48,.08)}
+body.light .ctitle{color:#1f2430}
+body.light .cnum{background:#e8ebfb;color:#4f46e5}
+body.light .cnt{background:#f1f3f9;border-color:#dfe4ee;color:#5b6478}
+body.light .hint{color:#7b8496}
+body.light .colbtn{background:#eef1fb;color:#1f2430;border-color:#cdd5ea}
+body.light li{background:#fff;border-color:#e2e7f0}
+body.light li:hover{background:#f5f7fd;border-color:#c7cfe6}
+body.light .nm{color:#1f2430}
+body.light .meta,body.light .dsc{color:#6b7490}
+body.light .mv{border-color:#d3dae7;color:#5b6478}
+body.light .mv:hover{background:#eef1fb;color:#1f2430}
+body.light .empty{border-color:#cfd6e6;color:#7b8496}
+body.light .paths{background:#fff;border-color:#dfe4ee}
+body.light .ptitle{color:#1f2430}
+body.light .prow input{background:#fff;color:#1f2430;border-color:#d3dae7}
+body.light .kbd{background:#f1f3f9;border-color:#dfe4ee;color:#4f46e5}
+body.light .hit{background:#c7d2fe;color:#312e81}
+body.light .csep::after{background:#cfd6e6}
+body.light .grip{color:#9aa3b5}
+body.light .cn{color:#12805c}
+body.light .go{color:#0e7490}
+body.light .tagd{background:#fde8ea;color:#b42318}
+body.light .tagw{background:#fdf3d8;color:#8a5a00}
+body.light .catb{filter:brightness(.97) saturate(1.04)}
+body.light ::-webkit-scrollbar-thumb{background:#c9d0e0}
+body.light ::-webkit-scrollbar-thumb:hover{background:#aab3c8}
+body.light input::placeholder{color:#9aa3b5}
+
 @media(max-width:760px){.sbox{width:100%;order:-1}}
 </style>
 </head>
@@ -200,6 +257,7 @@ li:hover .moves{opacity:1}
   </span>
   <span class="grp"><span class="glabel">其他</span>
     <button id="tr" title="用本地 AI 给 mod 补中文名和简介">翻译名称（本地 AI）</button>
+    <button id="btnTheme" title="深色 / 浅色界面切换（记住选择）">浅色模式</button>
   </span>
   <span class="spacer"></span>
   <span class="sbox" id="sBox">
@@ -249,6 +307,7 @@ li:hover .moves{opacity:1}
     <div class="hint">从上到下加载，<b>越靠下优先级越高</b> · 拖 ≡ 调顺序，或用悬停出现的 ↑↓ 微调</div>
     <ul id="activeList"></ul>
   </div>
+  <div class="csep" id="csep" title="左右拖动调整两栏宽度，双击恢复等宽"></div>
   <div class="col">
     <div class="chead">
       <div class="ctitle"><span class="cnum">②</span>未启用<span class="cnt" id="ci"></span></div>
@@ -301,8 +360,60 @@ function moveStep(m, isActive, dir){
 }
 function fmtMb(b){b=Number(b)||0;return b>=1073741824?(b/1073741824).toFixed(2)+' GB':(b/1048576).toFixed(0)+' MB';}
 
-async function load(){
-    const r = await fetch('/api/data');
+// ---------- 两栏宽度：左右拖动中间的分隔条，双击恢复等宽 ----------
+(function initColResize(){
+    const sep = document.getElementById('csep');
+    const cols = document.querySelector('.cols');
+    if (!sep || !cols) return;
+    const L = cols.children[0], R = cols.children[2];
+    const apply = pct => { L.style.flex = '0 0 ' + pct + '%'; R.style.flex = '0 0 ' + (100 - pct) + '%'; };
+    let saved = 0;
+    try { saved = parseFloat(localStorage.getItem('baroColPct')) || 0; } catch (e) { }
+    if (saved >= 25 && saved <= 75) apply(saved);
+    let on = false;
+    sep.addEventListener('mousedown', e => {
+        if (window.innerWidth <= 1000) return;   // 窄屏是上下排，不用调
+        on = true; sep.classList.add('on'); document.body.style.userSelect = 'none'; e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+        if (!on) return;
+        const r = cols.getBoundingClientRect();
+        let pct = (e.clientX - r.left) / r.width * 100;
+        pct = Math.max(25, Math.min(75, pct));
+        apply(pct);
+    });
+    document.addEventListener('mouseup', () => {
+        if (!on) return;
+        on = false; sep.classList.remove('on'); document.body.style.userSelect = '';
+        const pct = parseFloat(L.style.flex.split(' ')[2]) || 50;
+        try { localStorage.setItem('baroColPct', String(Math.round(pct))); } catch (e) { }
+    });
+    sep.addEventListener('dblclick', () => {
+        L.style.flex = ''; R.style.flex = '';
+        try { localStorage.removeItem('baroColPct'); } catch (e) { }
+    });
+})();
+
+// ---------- 深色 / 浅色 ----------
+(function initTheme(){
+    const btn = document.getElementById('btnTheme');
+    if (!btn) return;
+    let th = 'dark';
+    try { th = localStorage.getItem('baroTheme') || 'dark'; } catch (e) { }
+    function apply() {
+        document.body.classList.toggle('light', th === 'light');
+        btn.textContent = th === 'light' ? '深色模式' : '浅色模式';
+    }
+    apply();
+    btn.onclick = () => {
+        th = (th === 'light') ? 'dark' : 'light';
+        try { localStorage.setItem('baroTheme', th); } catch (e) { }
+        apply();
+    };
+})();
+
+async function load(fresh){
+    const r = await fetch(fresh ? '/api/data?fresh=1' : '/api/data');
     const d = await r.json();
     active = d.active || []; idle = d.idle || [];
     curPaths = d.paths || null;
@@ -628,7 +739,7 @@ document.getElementById('reload').onclick = async () => {
     try {
         await fetch('/api/paths/rescan', { method: 'POST' });
     } catch (e) { /* 失败也继续刷新列表 */ }
-    await load();
+    await load(true);   // 扫描路径必须拿最新结果，跳过服务端缓存
     show('已重新扫描路径并刷新 mod 列表', true);
     btn.disabled = false; btn.textContent = '扫描路径';
 };
@@ -1338,6 +1449,7 @@ document.getElementById('exportMods').onclick = async () => {
     if (!list.length) { show('当前没有已启用的 mod', false); return; }
     const btn = document.getElementById('exportMods');
     btn.disabled = true; btn.textContent = '导出中...';
+    show('正在复制 mod 并打包 zip，mod 多时可能要几分钟，期间界面可以正常操作…', true);
     try {
         const r = await fetch('/api/share/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder, list }) });
         const d = await r.json();

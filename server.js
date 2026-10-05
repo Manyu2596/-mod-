@@ -443,6 +443,24 @@ function collectIdentifiers(mods) {
     });
     return map;
 }
+// /api/data 每次要扫上百个 mod，先按「配置文件 + 两个 mod 根目录 + 改名/译文」做个指纹，
+// 没变化就直接复用上次结果（刷新列表更快）；改了配置、动了 mod、点了扫描路径都会自动失效。
+let __dataCache = { key: '', data: null };
+function dataFingerprint() {
+    const P = getPaths();
+    const parts = [];
+    const add = p => {
+        try { const st = fs.statSync(p); parts.push(p + '|' + st.mtimeMs + '|' + st.size); }
+        catch (e) { parts.push(p + '|-'); }
+    };
+    add(configPath()); add(USER_ZH); add(TRANS);
+    [P.WORKSHOP, P.LOCALMODS].forEach(base => {
+        try { parts.push(base + '|' + fs.readdirSync(base).join(',')); }
+        catch (e) { parts.push(base + '|-'); }
+    });
+    return parts.join('#');
+}
+
 // ---------- 扫描所有 mod ----------
 function buildData() {
     const enabledIds = loadEnabledIds();
@@ -946,6 +964,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (url === '/api/data') {
+        const wantFresh = /fresh=1/.test(req.url || '');
+        if (!wantFresh && __dataCache.data) {
+            const fp = dataFingerprint();
+            if (__dataCache.key === fp) return send(res, 200, JSON.stringify(__dataCache.data));
+        }
         try {
             const data = buildData();
             const P = getPaths();
@@ -960,6 +983,7 @@ const server = http.createServer((req, res) => {
                 installedExists: fs.existsSync(P.INSTALLED),
                 manual: loadUserPaths(),
             };
+            __dataCache = { key: dataFingerprint(), data };
             return send(res, 200, JSON.stringify(data));
         } catch (e) {
             return send(res, 500, JSON.stringify({ error: e.message }));
@@ -980,6 +1004,7 @@ const server = http.createServer((req, res) => {
             try {
                 const b = JSON.parse(raw) || {};
                 const n = save(b.list || [], !!b.allowEmpty);
+                __dataCache = { key: '', data: null };   // 配置已变，下次请求重新扫
                 send(res, 200, JSON.stringify({ ok: true, saved: n }));
             } catch (e) {
                 send(res, 500, JSON.stringify({ ok: false, error: e.message }));
@@ -1754,6 +1779,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 if (!target && fs.existsSync(path.join(ex, 'manifest.json'))) target = ex;
                 if (!target) throw new Error('这个 zip 里没有 manifest.json，不是本工具导出的 mod 包');
                 const r0 = doImport(target);
+                __dataCache = { key: '', data: null };
                 try { rmDirSync(tmp); } catch (e) { }
                 const out = { ok: true, fromZip: name };
                 Object.keys(r0).forEach(k => { out[k] = r0[k]; });

@@ -210,15 +210,17 @@ function classify(mod) {
     }
 
     // ⑧ 汉化（必须最先于"补丁"判断，否则被关键词截走）
-    if (/汉化|简体|chinese|cn_zh/.test(mod.name)) return { tier: 8, cat: '⑧ 汉化覆盖' };
+    if (/汉化|简体|中文|chinese|cn_zh|zh_cn|_zh\b/i.test(mod.name)) return { tier: 8, cat: '⑧ 汉化覆盖' };
 
     // ⑦ 附加包 / 兼容补丁（排在本体之后）
-    if (/补丁|expansion kit|附加|兼容/i.test(mod.name)) return { tier: 7, cat: '⑦ 附加包/补丁' };
+    //    注意：名字里带「兼容/补丁」但内容量很大的是大型内容 mod，归 ⑦ 会被排在真正的本体前面，这里放行走 ⑥
+    const bigContent = item >= 60 || ch >= 30 || (sub > 0 && item <= 10);
+    if (/补丁|expansion kit|附加|兼容/i.test(mod.name) && !bigContent) return { tier: 7, cat: '⑦ 附加包/补丁' };
 
     // ③ 性能优化：分两种
     //   · 纯脚本/机制类（不新增内容）→ ③ 靠前加载
     //   · 带原版内容覆写的（如「原版物品优化」）→ ④，与原版微调同层，避免盖掉大型内容 mod 的新增项
-    if (/performance|修复|优化/.test(n)) {
+    if (/performance|修复|优化|fix|bugfix|fps|lag|卡顿|帧数|性能/.test(n)) {
         if (hasContent || text > 0) return { tier: 4.5, cat: '④ 原版优化' };
         return { tier: 3, cat: '③ 性能优化' };
     }

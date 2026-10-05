@@ -53,17 +53,10 @@ foreach ($f in @('server.js', 'ui.html', 'sort.js', 'zh.json', 'fetch_meta.js', 
     $p = Join-Path $root $f
     if (Test-Path $p) { Copy-Item $p (Join-Path $dist $f) -Force }
 }
-# 还原用户数据（分享给别人前可自行删除这几个文件）
-foreach ($f in $keep.Keys) {
-    [System.IO.File]::WriteAllBytes((Join-Path $dist $f), $keep[$f])
-    Write-Host ("restored: " + $f)
-}
-# 还原用户目录（方案存档 / 存档备份 / 配置回滚历史）
-Get-ChildItem $keepRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-    Copy-Item $_.FullName (Join-Path $dist $_.Name) -Recurse -Force
-    Write-Host ("restored dir: " + $_.Name)
-}
-Remove-Item $keepRoot -Recurse -Force -ErrorAction SilentlyContinue
+# 用户数据已经不在程序目录里了（在 %LOCALAPPDATA%\潜渊症Mod管理器数据，或你自定义的位置），
+# 所以这里【不还原】任何数据 —— 打包出来的只应该是纯程序文件。
+# 上面那份兜底备份留在 $keepRoot（系统临时目录）里没删，真要找旧数据可以去那儿捞。
+Write-Host "user data lives outside dist, nothing restored"
 
 function W($name, $text) {
     [System.IO.File]::WriteAllText((Join-Path $dist $name), $text, (New-Object System.Text.UTF8Encoding($false)))
