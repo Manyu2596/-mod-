@@ -516,7 +516,12 @@ function setQuery(v){
     render();
 }
 
-sInput.addEventListener('input', () => { query = sInput.value; render(); });
+let __sTimer = null;
+sInput.addEventListener('input', () => {
+    query = sInput.value;
+    clearTimeout(__sTimer);
+    __sTimer = setTimeout(render, 120);   // 打字时别每敲一个字就重建一遍列表
+});
 sInput.addEventListener('keydown', e => { if (e.key === 'Escape') setQuery(''); });
 document.getElementById('sclear').onclick = () => { setQuery(''); sInput.focus(); };
 

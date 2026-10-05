@@ -293,7 +293,7 @@ async function translateAll() {
             const real = batch.find(n => __normName(n) === __normName(k));
             trans[real || k] = obj[k];
         });
-        fs.writeFileSync(TRANS, JSON.stringify(trans, null, 2), 'utf8');
+        writeFileAtomic(TRANS, JSON.stringify(trans, null, 2), 'utf8');
         added += Object.keys(obj).length;
     }
     return { trans, added, skipped };
@@ -363,7 +363,7 @@ function loadSizeCache() {
 }
 function saveSizeCache() {
     if (!__sizeDirty || !__sizeCache) return;
-    try { fs.writeFileSync(SIZE_CACHE, JSON.stringify(__sizeCache), 'utf8'); } catch (e) { }
+    try { writeFileAtomic(SIZE_CACHE, JSON.stringify(__sizeCache), 'utf8'); } catch (e) { }
     __sizeDirty = false;
 }
 function dirStats(dir) {
@@ -410,6 +410,8 @@ function modDirOf(m) {
     }
     return w;
 }
+// 覆盖关系扫描结果的缓存（放在模块作用域，跨请求复用；key 变了才重扫）
+let __ovCache = { key: '', out: null };
 function collectIdentifiers(mods) {
     const vanilla = vanillaIdentifiers();
     const map = {};
@@ -503,6 +505,28 @@ function buildData() {
 
     saveSizeCache();
     return { active, idle, trans: loadTrans() };
+}
+
+// 原子写：先写同目录临时文件，再 rename 覆盖。
+// 直接 writeFileSync 时如果中途崩了/断电，文件就是半截内容 —— config_player.xml 半截 = 游戏起不来。
+function writeFileAtomic(file, text, enc) {
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, text, enc || 'utf8');
+    try {
+        fs.renameSync(tmp, file);
+    } catch (e) {
+        // 少数情况（跨卷 / 被占用）rename 会失败，退回复制+删除
+        try { fs.copyFileSync(tmp, file); fs.unlinkSync(tmp); }
+        catch (e2) { try { fs.unlinkSync(tmp); } catch (e3) { } throw e; }
+    }
+}
+
+// 跑外部命令但不卡住服务（exec 是异步的，execSync 会把整个界面冻住）
+function runCmd(cmd, ms) {
+    return new Promise(resolve => {
+        exec(cmd, { timeout: ms || 900000, windowsHide: true, maxBuffer: 1 << 26 },
+            err => resolve(err ? String(err.message || err) : ''));
+    });
 }
 
 // ---------- 保存 ----------
@@ -600,7 +624,7 @@ function pkgPathFor(id, installedDir) {
         if (i < 0) throw new Error('配置里找不到 </config>，已放弃写入（避免把 config_player.xml 写坏）。请在游戏里启动一次让它重新生成，或删掉该文件后重开游戏');
         out = out.slice(0, i) + block + '</config>' + out.slice(i + '</config>'.length);
     }
-    fs.writeFileSync(configPath(), out, 'utf8');
+    writeFileAtomic(configPath(), out, 'utf8');
     return items.length;
 }
 
@@ -665,7 +689,7 @@ function loadVersions() {
     try { return JSON.parse(fs.readFileSync(VERSIONS, 'utf8')); } catch (e) { return null; }
 }
 function saveVersions(v) {
-    fs.writeFileSync(VERSIONS, JSON.stringify(v, null, 2), 'utf8');
+    writeFileAtomic(VERSIONS, JSON.stringify(v, null, 2), 'utf8');
 }
 
 // 扫描当前所有工坊 mod 的版本，作为一次快照
@@ -843,7 +867,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
 
 // ---------- 共享文件夹（导出/导入 mod 目录）----------
 function loadShare() { try { return JSON.parse(fs.readFileSync(SHARE_FILE, 'utf8')); } catch (e) { return {}; } }
-function saveShare(o) { fs.writeFileSync(SHARE_FILE, JSON.stringify(o, null, 2), 'utf8'); }
+function saveShare(o) { writeFileAtomic(SHARE_FILE, JSON.stringify(o, null, 2), 'utf8'); }
 function __escShare(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function __isWs(id) { return /^[0-9]{5,}$/.test(String(id == null ? '' : id).trim()); }
 // 模型翻译返回的键偶尔会丢空格/标点（如 DontOpenDebugConsoleOnErrors），
@@ -1070,7 +1094,7 @@ const server = http.createServer((req, res) => {
                 if (typeof b.zh === 'string') cur.zh = b.zh;
                 if (typeof b.desc === 'string') cur.desc = b.desc;
                 store[b.id] = cur;
-                fs.writeFileSync(USER_ZH, JSON.stringify(store, null, 2), 'utf8');
+                writeFileAtomic(USER_ZH, JSON.stringify(store, null, 2), 'utf8');
                 send(res, 200, JSON.stringify({ ok: true }));
             } catch (e) {
                 send(res, 500, JSON.stringify({ ok: false, error: e.message }));
@@ -1277,10 +1301,15 @@ const server = http.createServer((req, res) => {
     // 联机自检：游戏联机时用的是 Installed 目录（不是工坊下载目录），
     // mod 没同步过去、或两边版本不一致，加入别人游戏就会被要求重新下载
     // 覆盖关系：已启用 mod 之间谁覆盖了谁（按真实标识符，不靠名字猜）
+    // 覆盖关系：扫描很贵，按「启用清单 + 各 mod 版本」缓存，列表没变就直接复用
     if (url === '/api/overrides') {
         try {
             const data = buildData();
             const enabled = data.active;                 // 已是当前加载顺序
+            const ck = enabled.map(m => String(m.id) + ':' + String(m.modversion || '-')).join(',');
+            if (__ovCache.key === ck && __ovCache.out) {
+                return send(res, 200, JSON.stringify(Object.assign({ ok: true, cached: true }, __ovCache.out)));
+            }
             const map = collectIdentifiers(enabled);
             const pos = {};
             enabled.forEach((m, i) => { pos[String(m.id)] = i; });
@@ -1306,6 +1335,7 @@ const server = http.createServer((req, res) => {
                 count: pairs[k].idents.length,
                 idents: pairs[k].idents.slice(0, 8),
             })).sort((x, y) => y.count - x.count).slice(0, 30);
+            __ovCache = { key: ck, out: { pairs: out, scanned: enabled.length } };
             send(res, 200, JSON.stringify({ ok: true, pairs: out, scanned: enabled.length }));
         } catch (e) {
             send(res, 500, JSON.stringify({ ok: false, error: e.message }));
@@ -1389,7 +1419,7 @@ const server = http.createServer((req, res) => {
                 const cp = configPath();
                 try { fs.writeFileSync(cp + '.bak', fs.readFileSync(cp, 'utf8')); } catch (e) { }
                 const txt = fs.readFileSync(f, 'utf8');
-                fs.writeFileSync(cp, txt, 'utf8');
+                writeFileAtomic(cp, txt, 'utf8');
                 const m = txt.match(/<regularpackages>([\s\S]*?)<\/regularpackages>/);
                 let count = 0;
                 if (m) { const re = /<package\s/g; while (re.exec(m[1])) count++; }
@@ -1580,16 +1610,14 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                             const cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path ' +
                                 Q_(path.join(folder, '*')) + ' -DestinationPath ' + Q_(zipPath) +
                                 ' -CompressionLevel Optimal -Force"';
-                            execSync(cmd, { timeout: 900000, windowsHide: true, maxBuffer: 1 << 26 });
-                        } catch (e) {
-                            // Compress-Archive 对超 2GB / 超长路径会失败，回退到系统自带 tar
-                            zipError = String(e.message || e).slice(0, 80);
-                            try {
-                                execSync('tar -a -c -f ' + Q_(zipPath) + ' -C ' + Q_(folder) + ' .',
-                                    { timeout: 900000, windowsHide: true, maxBuffer: 1 << 26 });
-                                zipError = '';
-                            } catch (e2) { zipError = String(e2.message || e2).slice(0, 120); }
-                        }
+                            const e1 = await runCmd(cmd, 900000);
+                            if (e1) {
+                                // Compress-Archive 对超 2GB / 超长路径会失败，回退到系统自带 tar
+                                zipError = String(e1).slice(0, 80);
+                                const e2 = await runCmd('tar -a -c -f ' + Q_(zipPath) + ' -C ' + Q_(folder) + ' .', 900000);
+                                zipError = e2 ? String(e2).slice(0, 120) : '';
+                            }
+                        } catch (e) { zipError = String(e.message || e).slice(0, 120); }
                         if (fs.existsSync(zipPath)) { zipSize = fs.statSync(zipPath).size; zipError = ''; }
                         else { zipError = zipError || '压缩失败（未生成文件）'; zipPath = ''; }
                     } catch (e) { zipError = String(e.message || e).slice(0, 120); zipPath = ''; }
@@ -1692,7 +1720,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     if (url === '/api/share/import-zip' && req.method === 'POST') {
         let raw = '';
         req.on('data', d => { raw += d; });
-        req.on('end', () => {
+        req.on('end', async () => {
             try {
                 const b = JSON.parse(raw);
                 const name = String(b.name || 'mods.zip');
@@ -1703,13 +1731,11 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 const zp = path.join(tmp, 'pack.zip');
                 fs.writeFileSync(zp, buf);
                 const ex = path.join(tmp, 'x'); fs.mkdirSync(ex, { recursive: true });
-                try {
-                    execSync('powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path ' +
-                        Q_(zp) + ' -DestinationPath ' + Q_(ex) + ' -Force"',
-                        { timeout: 900000, windowsHide: true, maxBuffer: 1 << 26 });
-                } catch (e) {
-                    execSync('tar -x -f ' + Q_(zp) + ' -C ' + Q_(ex),
-                        { timeout: 900000, windowsHide: true, maxBuffer: 1 << 26 });
+                const e1 = await runCmd('powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path ' +
+                    Q_(zp) + ' -DestinationPath ' + Q_(ex) + ' -Force"', 900000);
+                if (e1) {
+                    const e2 = await runCmd('tar -x -f ' + Q_(zp) + ' -C ' + Q_(ex), 900000);
+                    if (e2) throw new Error('解压失败：' + String(e2).slice(0, 160));
                 }
                 // zip 里可能多包一层目录，往下找 manifest.json
                 let target = '';
@@ -2085,7 +2111,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                     active: (b.list || []).map(m => ({ id: safeModId(m && m.id), name: (m && (m.zh || m.name)) || '' })).filter(o => o.id),
                 };
                 if (!data.active.length) throw new Error('没有有效的 mod id');
-                fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+                writeFileAtomic(file, JSON.stringify(data, null, 2), 'utf8');
                 send(res, 200, JSON.stringify({ ok: true, name: path.basename(file, '.json'), count: data.active.length }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
