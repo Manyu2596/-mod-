@@ -723,7 +723,8 @@ document.getElementById('joinCheck').onclick = async () => {
             '<button id="jcSub" class="primary">给队友生成订阅清单（' + (h.wsCount || 0) + ' 个工坊 mod）</button>' +
             '<button id="jcShare" class="primary">生成队友检查页</button>' +
             '<button id="jcClose">关闭</button>' +
-            '<span class="hint">检查页 = 一个自包含的 HTML 文件，发给队友打开就知道自己缺哪些、顺序对不对（离线可用，不需要联网和服务器）</span></div>';
+            '<span class="hint">检查页 = 一个自包含的 HTML 文件发给队友：他打开点「自动检测」就知道缺哪些、多了哪些；' +
+            '缺失的可以一键跳创意工坊订阅，装了本工具的话还能「一键对齐」——自动按你的顺序启用、并停掉他多开的那些（离线可用）</span></div>';
         box.style.display = 'block';
         box.className = 'report ' + (prob.indexOf('class="sev c"') >= 0 ? 'danger' : 'warn');
         document.getElementById('jcClose').onclick = () => { box.style.display = 'none'; };
