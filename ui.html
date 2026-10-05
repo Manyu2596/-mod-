@@ -495,7 +495,7 @@ document.getElementById('resort').onclick = async () => {
             active = d.list.filter(x => x.enabled).map(x => byId[x.id]).filter(Boolean);
             idle = d.list.filter(x => !x.enabled).map(x => byId[x.id]).filter(Boolean);
             render();
-            show('已按规则重新排序，点「保存到游戏」生效', true);
+            show('已重排：' + ((d.notes && d.notes.length) ? d.notes.join('；') : '已按分层规则排序') + '。点「保存到游戏」生效', true);
         } else {
             show('排序失败：' + d.error, false);
         }

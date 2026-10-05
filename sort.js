@@ -215,8 +215,13 @@ function classify(mod) {
     // ⑦ 附加包 / 兼容补丁（排在本体之后）
     if (/补丁|expansion kit|附加|兼容/i.test(mod.name)) return { tier: 7, cat: '⑦ 附加包/补丁' };
 
-    // ③ 性能优化（XML 覆写类，作者要求靠上）
-    if (/performance|修复|优化/.test(n)) return { tier: 3, cat: '③ 性能优化' };
+    // ③ 性能优化：分两种
+    //   · 纯脚本/机制类（不新增内容）→ ③ 靠前加载
+    //   · 带原版内容覆写的（如「原版物品优化」）→ ④，与原版微调同层，避免盖掉大型内容 mod 的新增项
+    if (/performance|修复|优化/.test(n)) {
+        if (hasContent || text > 0) return { tier: 4.5, cat: '④ 原版优化' };
+        return { tier: 3, cat: '③ 性能优化' };
+    }
 
     // ⑤ 功能 / QoL / 界面（只新增，冲突少）
     if (/display|显示|customizer|qol|health|kill|血量|提示|immersion|bot ai|reload/.test(n)) {
@@ -430,7 +435,7 @@ h2.sec span{color:#8b94a8;font-size:12.5px;font-weight:normal;margin-left:8px}
 </div>
 <div class="hint">
 按表格<b>从上到下</b>照排。<b>加载顺序自上而下，后加载的覆盖先加载的</b>。<br>
-分层：<b>① 原版核心 → ② 前置框架 → ③ 性能优化 → ④ 原版微调 → ⑤ 功能/QoL → ⑥ 大型内容/玩法 → ⑦ 附加包/补丁 → ⑧ 汉化覆盖</b>
+分层：<b>① 原版核心 → ② 前置框架 → ③ 性能优化（纯脚本） → ④ 原版微调/优化覆写 → ⑤ 功能/QoL → ⑥ 大型内容/玩法 → ⑦ 附加包/补丁 → ⑧ 汉化覆盖</b>
 </div>
 ${conflictHtml}
 ${addonHtml}
@@ -482,31 +487,82 @@ function esc(s) {
 }
 
 // ---------- 重新排序（供网页管理器在启用后再次排序使用）----------
-// 对“已启用”的 mod 列表按规则重排：前置框架最前、补丁紧跟本体、旧框架沉底
-// list: 含 { id, name, tier } 的数组；返回重排后的新数组
+// 规则（后加载覆盖先加载，所以“越靠后优先级越高”）：
+//   ① 脚本框架置顶 → ② 按分层 tier 升序 → ③ 补丁/扩展紧跟本体 → ④ 依赖排在使用方之前（拓扑）
+//   → ⑤ 汉化覆盖沉底 → ⑥ 旧框架 / 作者已废弃 沉底
+// list: 含 { id, name, tier, deps } 的数组；返回重排后的新数组（数组上带 .notes 说明本次做了哪些调整）
 function resortActive(list) {
-    const FRAME = [/luacsforbarotrauma/i, /luacsclientside/i];
-    const framed = [];
-    FRAME.forEach(re => {
-        list.filter(m => re.test(m.name)).forEach(m => framed.push(m));
-    });
-    const isNoload = m => /^csforbarotrauma/i.test(m.name) && !/luacs/i.test(m.name);
-    const rest = list.filter(m => !FRAME.some(re => re.test(m.name)) && !isNoload(m));
-    const noload = list.filter(isNoload);
+    const nm = (m) => String((m && m.name) || '');
+    const isLuaFrame = m => /luacsforbarotrauma/i.test(nm(m));
+    const isClientSide = m => /luacsclientside/i.test(nm(m));
+    const isOldFrame = m => /^csforbarotrauma/i.test(nm(m)) && !/luacs/i.test(nm(m));
+    const isDead = m => /已被.{0,10}取代|废弃|已弃用|deprecated|不再维护/i.test(nm(m));
+    const isZh = m => /汉化|简体|chinese|cn_zh/i.test(nm(m));
+    const isAddon = m => /(补丁|patch|扩展|拓展|expansion|extra|add-?on|兼容|compat)/i.test(nm(m));
 
-    rest.sort((a, b) => (a.tier - b.tier) || (a.name || '').localeCompare(b.name || '', 'zh'));
+    const head = list.filter(isLuaFrame).concat(list.filter(isClientSide));
+    const tail = list.filter(m => isOldFrame(m) || isDead(m));
+    const zh = list.filter(m => isZh(m) && tail.indexOf(m) < 0);
+    let rest = list.filter(m => head.indexOf(m) < 0 && tail.indexOf(m) < 0 && zh.indexOf(m) < 0);
 
-    // 补丁紧跟本体（与报告主流程一致）：后加载才能盖住主 mod
-    rest.filter(m => /补丁/.test(m.name)).forEach(p => {
-        const base = p.name.replace(/Lua补丁|补丁/g, '').trim();
+    const notes = [];
+    if (head.length) notes.push('脚本框架置顶 ' + head.length + ' 个（Lua/C# 依赖它）');
+
+    // ① 分层：tier 小的先加载；同层按名称，保证结果稳定可复现
+    const byTier = (a, b) => (a.tier - b.tier) || nm(a).localeCompare(nm(b), 'zh');
+    rest.sort(byTier);
+    zh.sort(byTier);
+
+    // ② 补丁 / 扩展 / 兼容包紧跟本体：后加载才能盖住本体（汉化单独沉底，不参与）
+    let addonMoved = 0;
+    const restIds = new Set(rest.map(m => m.id));
+    rest.filter(isAddon).forEach(p => {
+        let base = null;
+        const dep = (p.deps || []).filter(d => d && restIds.has(d.id))[0];
+        if (dep) base = rest.filter(m => m.id === dep.id)[0];
+        if (!base) {
+            const b = nm(p).replace(/Lua补丁|自用汉化|汉化补丁|汉化|补丁|Lua\s*Patch|Patch/gi, '').trim();
+            if (b) base = rest.filter(m => m !== p && !isAddon(m) && nm(m).indexOf(b) === 0)[0];
+        }
         if (!base) return;
-        const main = rest.find(m => m !== p && !/补丁/.test(m.name) && m.name.includes(base));
-        if (!main) return;
-        rest.splice(rest.indexOf(p), 1);
-        rest.splice(rest.indexOf(main) + 1, 0, p);
+        const bi = rest.indexOf(base), pi = rest.indexOf(p);
+        if (pi === bi + 1) return;                       // 已经紧邻本体，不用动
+        rest.splice(pi, 1);
+        rest.splice(rest.indexOf(base) + 1, 0, p);
+        addonMoved++;
     });
+    if (addonMoved) notes.push('补丁/扩展归位到本体之后 ' + addonMoved + ' 个');
 
-    return [...framed, ...rest, ...noload];
+    // ③ 依赖拓扑：前置（框架 / 系列本体）必须排在使用它的 mod 之前
+    const all = rest.concat(zh);
+    const restLen = rest.length;
+    const idx = new Map();
+    const reindex = () => { idx.clear(); all.forEach((m, i) => idx.set(m.id, i)); };
+    reindex();
+    let depMoved = 0, guard = all.length * all.length + 20;
+    for (let i = 0; i < all.length && guard-- > 0; i++) {
+        const m = all[i];
+        if (isZh(m)) continue;                           // 汉化永远留在最后一段，不能前移
+        const ds = (m.deps || []).filter(d => d && idx.has(d.id) && idx.get(d.id) > i);
+        if (!ds.length) continue;
+        const target = Math.max.apply(null, ds.map(d => idx.get(d.id)));
+        all.splice(i, 1);                                 // 移除后 target 下标左移一位
+        all.splice(target, 0, m);                         // 插到最靠后的依赖之后
+        reindex();
+        i = -1;                                           // 变动后重新扫一遍
+        depMoved++;
+    }
+    if (depMoved) notes.push('依赖顺序修正 ' + depMoved + ' 处（前置排到使用方之前）');
+
+    rest = all.slice(0, restLen);
+    const zhOut = all.slice(restLen);
+
+    if (zhOut.length) notes.push('汉化覆盖沉底 ' + zhOut.length + ' 个（最后加载才能盖住原文）');
+    if (tail.length) notes.push('旧框架/已废弃沉底 ' + tail.length + ' 个（建议停用）');
+
+    const out = head.concat(rest, zhOut, tail);
+    out.notes = notes;
+    return out;
 }
 
 // 作为库被 server.js 复用时不自动执行

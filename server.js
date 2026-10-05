@@ -713,11 +713,12 @@ const server = http.createServer((req, res) => {
                 const enabledIds = list.filter(x => x.enabled).map(x => x.id);
                 const enabledMods = enabledIds.map(id => byId[id]).filter(Boolean);
                 const sortedEnabled = lib.resortActive(enabledMods);
+                const notes = sortedEnabled.notes || [];
 
                 const disabledIds = list.filter(x => !x.enabled).map(x => x.id);
                 const out = sortedEnabled.map(m => ({ id: m.id, enabled: true }))
                     .concat(disabledIds.map(id => ({ id, enabled: false })));
-                send(res, 200, JSON.stringify({ ok: true, list: out }));
+                send(res, 200, JSON.stringify({ ok: true, list: out, notes: notes }));
             } catch (e) {
                 send(res, 500, JSON.stringify({ ok: false, error: e.message }));
             }
