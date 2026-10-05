@@ -18,19 +18,25 @@ if (!(Test-Path $nodeSrc)) {
     exit 1
 }
 
-# ---------- 1. 用户数据不在这里 ----------
-# 存档备份 / mod 方案存档 / 配置回滚历史 / 译文 / 版本基线 都存在
-# %LOCALAPPDATA%\潜渊症Mod管理器数据（server.js 的 DATA_DIR），不在程序目录里，
-# 所以重打包、升级版本、重装都不会碰到它们。这里只保留一份「万一还有残留」的兜底备份。
+# ---------- 1. 备份用户数据（数据在软件目录里，重建 dist 会连它一起删，必须先备份） ----------
+# 存档备份 / mod 方案存档 / 配置回滚历史 / 译文 / 版本基线 都存在 <软件目录>\数据
+# （server.js 的 DATA_DIR）。所以这里整份备份，重建完再原样放回去 —— 升级不会丢数据。
+$keepRoot = Join-Path $env:TEMP 'BaroDistDataBackup'
+if (Test-Path $keepRoot) { Remove-Item $keepRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $keepRoot -Force | Out-Null
+
+$dataDir = Join-Path $dist '数据'
+if (Test-Path $dataDir) {
+    Copy-Item $dataDir (Join-Path $keepRoot '数据') -Recurse -Force
+    Write-Host "backup: 数据"
+}
+# 老版本把数据直接摊在程序目录根上，也一并兜底备份
 $userData = @('user_zh.json', 'translations.json', 'versions.json', 'share.json', 'modsize.json')
 $keep = @{}
 foreach ($f in $userData) {
     $p = Join-Path $dist $f
     if (Test-Path $p) { $keep[$f] = [System.IO.File]::ReadAllBytes($p) }
 }
-$keepRoot = Join-Path $env:TEMP 'BaroDistDataBackup'
-if (Test-Path $keepRoot) { Remove-Item $keepRoot -Recurse -Force }
-New-Item -ItemType Directory -Path $keepRoot -Force | Out-Null
 $userDirs = @('presets', 'savebackups', 'confighistory', 'exported_mods', '导出的mod')
 foreach ($d in $userDirs) {
     $p = Join-Path $dist $d
@@ -53,10 +59,20 @@ foreach ($f in @('server.js', 'ui.html', 'sort.js', 'zh.json', 'fetch_meta.js', 
     $p = Join-Path $root $f
     if (Test-Path $p) { Copy-Item $p (Join-Path $dist $f) -Force }
 }
-# 用户数据已经不在程序目录里了（在 %LOCALAPPDATA%\潜渊症Mod管理器数据，或你自定义的位置），
-# 所以这里【不还原】任何数据 —— 打包出来的只应该是纯程序文件。
-# 上面那份兜底备份留在 $keepRoot（系统临时目录）里没删，真要找旧数据可以去那儿捞。
-Write-Host "user data lives outside dist, nothing restored"
+# ---------- 3. 把用户数据放回去 ----------
+$backData = Join-Path $keepRoot '数据'
+if (Test-Path $backData) {
+    Copy-Item $backData (Join-Path $dist '数据') -Recurse -Force
+    Write-Host "restored: 数据"
+}
+foreach ($f in $keep.Keys) {
+    [System.IO.File]::WriteAllBytes((Join-Path $dist $f), $keep[$f])
+}
+foreach ($d in $userDirs) {
+    $p = Join-Path $keepRoot $d
+    if (Test-Path $p) { Copy-Item $p (Join-Path $dist $d) -Recurse -Force; Write-Host ("restored dir: " + $d) }
+}
+Write-Host "user data restored from $keepRoot"
 
 function W($name, $text) {
     [System.IO.File]::WriteAllText((Join-Path $dist $name), $text, (New-Object System.Text.UTF8Encoding($false)))

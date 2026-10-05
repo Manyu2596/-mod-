@@ -81,6 +81,11 @@ function resolveDataDir() {
     const tryMk = d => { try { fs.mkdirSync(d, { recursive: true }); return d; } catch (e) { return ''; } };
     const env = (process.env.BARO_DATA || '').trim();
     if (env) { const r = tryMk(env); if (r) return r; }
+    // 默认就放在软件自己的目录里：整个软件是一个自包含的包，拷走这个文件夹 = 完整备份
+    const inApp = path.join(__dirname, '数据');
+    const r0 = tryMk(inApp);
+    if (r0) return r0;
+    // 程序目录写不进去（比如在 Program Files 里）才往外放
     const saved = regGetDataDir();
     if (saved) { const r = tryMk(saved); if (r) return r; }
     for (const c of candidateDrives()) { const r = tryMk(c.dir); if (r) return r; }   // 优先非系统盘
@@ -119,7 +124,7 @@ function copyDirInto(src, dst) {
     for (const e of fs.readdirSync(src, { withFileTypes: true })) {
         const a = path.join(src, e.name), b = path.join(dst, e.name);
         if (e.isDirectory()) copyDirInto(a, b);
-        else { try { fs.copyFileSync(a, b); } catch (err) { } }
+        else { try { if (!fs.existsSync(b)) fs.copyFileSync(a, b); } catch (err) { } }
     }
 }
 function migrateUserData(from) {
@@ -128,22 +133,37 @@ function migrateUserData(from) {
     USER_DATA_ITEMS.forEach(it => {
         const src = path.join(from, it.name);
         const dst = path.join(DATA_DIR, it.name);
-        if (!fs.existsSync(src) || fs.existsSync(dst)) return;
+        if (!fs.existsSync(src)) return;
         try {
-            if (it.dir) copyDirInto(src, dst); else fs.copyFileSync(src, dst);
-            n++;
-            console.log('用户数据已迁移：' + src + ' -> ' + dst);
+            // 目录：合并进来（跳过同名文件）；文件：目标已有就不动
+            if (it.dir) { copyDirInto(src, dst); n++; console.log('用户数据已迁移：' + src + ' -> ' + dst); }
+            else if (!fs.existsSync(dst)) { fs.copyFileSync(src, dst); n++; console.log('用户数据已迁移：' + src + ' -> ' + dst); }
         } catch (e) { console.log('迁移失败（忽略）：' + it.name + ' — ' + e.message); }
     });
     return n;
 }
 
-// 老版本把数据放在程序目录里，上一版默认位置是 %LOCALAPPDATA%（C 盘）—— 两个都扫一遍
-if (DATA_DIR !== __dirname) {
-    migrateUserData(__dirname);
-    const legacy = path.join(process.env.LOCALAPPDATA || process.env.APPDATA || '', DATA_DIR_NAME);
-    if (legacy && fs.existsSync(legacy)) migrateUserData(legacy);
-}
+// 之前数据散在别处（程序目录根、%LOCALAPPDATA%、某个盘根目录、自己指定的目录）—— 全扫一遍搬回包内
+(function migrateAll() {
+    const from = [];
+    if (DATA_DIR !== __dirname) from.push(__dirname);
+    const appdata = process.env.LOCALAPPDATA || process.env.APPDATA || '';
+    if (appdata) from.push(path.join(appdata, DATA_DIR_NAME));
+    const saved = regGetDataDir();
+    if (saved) from.push(saved);
+    try { candidateDrives().forEach(c => from.push(c.dir)); } catch (e) { }
+    const seen = {};
+    let moved = 0;
+    from.forEach(d => {
+        if (!d) return;
+        const k = path.resolve(d).toLowerCase();
+        if (seen[k] || k === path.resolve(DATA_DIR).toLowerCase()) return;
+        seen[k] = 1;
+        if (!fs.existsSync(d)) return;
+        moved += migrateUserData(d);
+    });
+    if (moved) console.log('已把 ' + moved + ' 项数据搬回软件目录：' + DATA_DIR);
+})();
 
 const UI = path.join(__dirname, 'ui.html');
 const ZH_PATH = path.join(__dirname, 'zh.json');

@@ -10,8 +10,9 @@ body{background:#0b0e14;color:#e6e9ef;font-family:"Microsoft YaHei","PingFang SC
 body::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;
   background:radial-gradient(1100px 520px at 18% -12%,#1a2133 0%,rgba(11,14,20,0) 65%),
              radial-gradient(900px 460px at 92% 4%,#1b1730 0%,rgba(11,14,20,0) 60%)}
-::-webkit-scrollbar{width:9px;height:9px}
-::-webkit-scrollbar-thumb{background:#2a3346;border-radius:6px}
+::-webkit-scrollbar{width:13px;height:13px}
+::-webkit-scrollbar-thumb{background:#2a3346;border-radius:8px;
+  border:3px solid transparent;background-clip:padding-box}
 ::-webkit-scrollbar-thumb:hover{background:#3b4763}
 ::-webkit-scrollbar-track{background:transparent}
 :focus-visible{outline:2px solid #818cf8;outline-offset:1px}
@@ -87,27 +88,27 @@ button.quit:hover{background:#4d252e;border-color:#a33d4b}
 /* ---------- 两栏 ---------- */
 .cols{display:flex;gap:18px;align-items:flex-start}
 .col{flex:1;min-width:0;background:#111725;border:1px solid #1f2739;border-radius:14px;
-  padding:12px 12px 10px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
-.chead{display:flex;align-items:center;gap:9px;margin-bottom:3px}
+  padding:14px 20px 12px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+.chead{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .ctitle{font-size:14px;font-weight:600;display:flex;align-items:center;gap:7px}
 .cnum{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;
   border-radius:7px;font-size:12px;background:#1d2740;color:#a5b4fc}
 .cnt{color:#8b94a8;font-size:11.5px;font-weight:400;background:#161e2e;border:1px solid #222c40;
   border-radius:20px;padding:1px 9px}
-.chead .btns{margin-left:auto;display:flex;gap:6px}
+.chead .btns{margin-left:auto;display:flex;gap:8px;flex-shrink:0;padding-right:19px}
 .colbtn{background:#2b3550;color:#e6e9ef;border:1px solid #3a4562;border-radius:8px;
-  padding:5px 13px;font-size:12.5px;cursor:pointer;font-family:inherit;transition:filter .13s,border-color .13s}
+  padding:6px 14px;font-size:12.5px;cursor:pointer;font-family:inherit;transition:filter .13s,border-color .13s}
 .colbtn.en{background:#1e5c46;border-color:#2c8a63;color:#eafff6}
 .colbtn.en:hover{filter:brightness(1.18)}
 .colbtn.dg{background:#5c2333;border-color:#8a3350;color:#ffeef2}
 .colbtn.dg:hover{filter:brightness(1.18)}
 .colbtn:disabled{opacity:.5;cursor:default}
-.hint{color:#6b7590;font-size:11.5px;margin-bottom:8px;line-height:1.5}
+.hint{color:#6b7590;font-size:11.5px;margin-bottom:10px;line-height:1.5}
 
-ul{list-style:none;margin:0;padding:0 4px 0 0;min-height:70px;
+ul{list-style:none;margin:0;padding:0 8px 2px 2px;min-height:70px;
   max-height:calc(100vh - 330px);overflow:auto}
 @media(max-width:1000px){ul{max-height:none}}
-li{display:flex;align-items:center;gap:9px;padding:8px 10px;margin-bottom:6px;
+li{display:flex;align-items:center;gap:12px;padding:10px 12px;margin-bottom:9px;
   background:#161d2c;border:1px solid #212a3e;border-radius:10px;cursor:default;
   transition:background .13s,border-color .13s,box-shadow .13s}
 li:hover{background:#1c2437;border-color:#33405f;box-shadow:0 2px 10px rgba(0,0,0,.25)}
@@ -118,8 +119,8 @@ li:hover .grip{color:#8b94a8}
 .idx{color:#8b94a8;font-size:11.5px;width:20px;text-align:right;flex-shrink:0}
 .info{flex:1;min-width:0}
 .nm{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.meta{color:#6b7590;font-size:11px;margin-top:3px}
-.dsc{color:#8b94a8;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{color:#6b7590;font-size:11px;margin-top:5px}
+.dsc{color:#8b94a8;font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tagd{background:#4a1a1e;color:#f87171;font-size:10.5px;padding:1px 6px;border-radius:8px}
 .tagw{background:#4a3a12;color:#fbbf24;font-size:10.5px;padding:1px 6px;border-radius:8px}
 /* 分类色标：①~⑧ 各一个颜色，一眼看出分层 */
@@ -132,12 +133,13 @@ li:hover .grip{color:#8b94a8}
 .ct6{background:#46290f;color:#fdba74;border-color:#6e4019}
 .ct7{background:#3a1f3f;color:#f0abfc;border-color:#5c2f63}
 .ct8{background:#3f2626;color:#fca5a5;border-color:#5f3636}
-.tog{flex-shrink:0;padding:4px 10px;font-size:11.5px}
+.tog{flex-shrink:0;padding:6px 13px;font-size:11.5px}
 .tr2{background:#1c2c3a;color:#7dd3fc;border-color:#26445c}
 .filldep{background:#3f2d10;color:#fbbf24;border-color:#5f4519}
 .tgs{background:#243050;color:#c7d2fe;border-color:#33456e}
-.go{color:#7dd3fc;text-decoration:none;font-size:12px;padding:3px 7px;flex-shrink:0;border-radius:7px}
-.go:hover{color:#a5b4fc;background:#151d2e}
+.go{color:#7dd3fc;text-decoration:none;font-size:11.5px;padding:5px 10px;flex-shrink:0;
+  border:1px solid #26445c;border-radius:8px;background:#151f2c}
+.go:hover{color:#a5b4fc;background:#1b2838;border-color:#33567a}
 .cn{color:#4ade80}
 /* 上下移：悬停才显示，避免平时占空间 */
 .moves{display:flex;flex-direction:column;gap:2px;flex-shrink:0;opacity:0;transition:opacity .13s}
@@ -215,15 +217,56 @@ body.light .hit{background:#c7d2fe;color:#312e81}
 body.light .csep::after{background:#cfd6e6}
 body.light .grip{color:#9aa3b5}
 body.light .cn{color:#12805c}
-body.light .go{color:#0e7490}
+body.light .go{color:#0e7490;background:#eef3fa;border-color:#d3dae7}
+body.light .go:hover{background:#e2eaf5;border-color:#b9c6dd}
 body.light .tagd{background:#fde8ea;color:#b42318}
 body.light .tagw{background:#fdf3d8;color:#8a5a00}
 body.light .catb{filter:brightness(.97) saturate(1.04)}
-body.light ::-webkit-scrollbar-thumb{background:#c9d0e0}
+body.light ::-webkit-scrollbar-thumb{background:#c9d0e0;border:3px solid transparent;background-clip:padding-box}
 body.light ::-webkit-scrollbar-thumb:hover{background:#aab3c8}
 body.light input::placeholder{color:#9aa3b5}
 
-@media(max-width:760px){.sbox{width:100%;order:-1}}
+@media(max-width:760px){.sbox{width:100%;order:-1}
+  li{flex-wrap:wrap}.info{flex:1 1 100%}}
+/* ---------- 「更多」下拉菜单 ---------- */
+#moreWrap{position:relative}
+#moreWrap>.caret{font-size:10px;margin-left:2px;color:#8b94a8}
+.menu{display:none;position:absolute;top:calc(100% + 7px);left:0;z-index:60;min-width:200px;
+  background:#141b2b;border:1px solid #2a3346;border-radius:12px;padding:6px;
+  box-shadow:0 16px 38px rgba(0,0,0,.5)}
+.menu .mlabel{color:#5b657d;font-size:10.5px;letter-spacing:.5px;padding:7px 10px 3px;user-select:none}
+.menu button{display:block;width:100%;text-align:left;background:transparent;border:none;
+  border-radius:8px;padding:8px 10px;font-size:12.5px;color:#e6e9ef}
+.menu button:hover{background:#1e2740;color:#fff}
+body.light .menu{background:#fff;border-color:#dfe4ee;box-shadow:0 16px 38px rgba(31,36,48,.14)}
+body.light .menu button{color:#1f2430}
+body.light .menu button:hover{background:#eef1fb}
+body.light .menu .mlabel{color:#7b8496}
+
+/* ---------- 面板统一：同一时间只开一个 + 右上角关闭 ---------- */
+.report,.paths{position:relative}
+.report{padding:14px 42px 14px 16px}
+.report h3{margin:0 20px 8px 0}
+.pclose{position:absolute;top:9px;right:10px;background:transparent;border:none;
+  color:#7b8496;font-size:19px;line-height:1;padding:3px 8px;border-radius:8px;cursor:pointer}
+.pclose:hover{color:#f87171;background:#1c2437}
+body.light .pclose{color:#7b8496}
+body.light .pclose:hover{background:#eef1fb;color:#b42318}
+
+/* ---------- 两栏：按视口高度自适应，列表自己滚 ---------- */
+.cols{align-items:stretch}
+.col{display:flex;flex-direction:column;min-height:0}
+.col ul{flex:1;min-height:120px;max-height:none;overflow:auto}
+@media(max-width:1000px){.cols{height:auto!important}.col ul{max-height:none}}
+/* 条目：左侧分类色条 + 常驻按钮精简（次要按钮悬停才显形） */
+li{border-left:3px solid transparent}
+li .tr2{opacity:.4;transition:opacity .13s}
+li:hover .tr2{opacity:1}
+.nm{font-size:13px;font-weight:500}
+.idx{background:#161e2e;border:1px solid #222c40;border-radius:6px;
+  padding:1px 4px;text-align:center;line-height:1.35}
+body.light .idx{background:#f1f3f9;border-color:#dfe4ee}
+
 </style>
 </head>
 <body>
@@ -242,30 +285,32 @@ body.light input::placeholder{color:#9aa3b5}
     <button id="updates" title="对比上次快照，看哪些 mod 更新了">检查更新</button>
     <button id="btnOv" title="查看已启用 mod 之间谁覆盖了谁，可一键换顺序">覆盖关系</button>
     <button id="btnHist" title="每次保存前的配置备份，可一键回滚">配置回滚</button>
-    <button id="reload" title="重新扫描已安装 / 本地 mod">扫描路径</button>
-    <button id="paths" title="游戏目录、创意工坊、本地 mod 目录、导出目录">路径设置</button>
   </span>
-  <span class="grp"><span class="glabel">导入导出</span>
-    <button id="exportMods" title="把选中的 mod 打包导出">导出mod文件</button>
-    <button id="importMods" title="从导出的文件夹导入 mod">导入mod文件</button>
-    <button id="importZip" title="导入 zip 包（可含订阅链接）">导入zip包</button>
-    <input type="file" id="zipFile" accept=".zip" style="display:none">
-    <button id="btnSubLink" title="生成 / 导入创意工坊订阅链接">订阅链接</button>
-    <button id="btnPresets" title="把当前这套启用组合存成方案，随时切回">mod方案存档</button>
-    <button id="btnSaves" title="游戏存档备份 / 还原">存档管理</button>
-    <button id="openFolder" title="打开导出文件夹">打开文件夹</button>
-  </span>
-  <span class="grp"><span class="glabel">其他</span>
-    <button id="tr" title="用本地 AI 给 mod 补中文名和简介">翻译名称（本地 AI）</button>
-    <button id="btnTheme" title="深色 / 浅色界面切换（记住选择）">浅色模式</button>
+  <span class="grp" id="moreWrap">
+    <button id="btnMore" title="导入导出 / 存档 / 设置等">更多 <span class="caret">▾</span></button>
+    <div class="menu" id="moreMenu">
+      <div class="mlabel">导入导出</div>
+      <button id="exportMods" title="把选中的 mod 打包导出">导出mod文件</button>
+      <button id="importMods" title="从导出的文件夹导入 mod">导入mod文件</button>
+      <button id="importZip" title="导入 zip 包（可含订阅链接）">导入zip包</button>
+      <input type="file" id="zipFile" accept=".zip" style="display:none">
+      <button id="btnSubLink" title="生成 / 导入创意工坊订阅链接">订阅链接</button>
+      <button id="btnPresets" title="把当前这套启用组合存成方案，随时切回">mod方案存档</button>
+      <div class="mlabel">存档与设置</div>
+      <button id="btnSaves" title="游戏存档备份 / 还原">存档管理</button>
+      <button id="reload" title="重新扫描已安装 / 本地 mod">扫描路径</button>
+      <button id="paths" title="游戏目录、创意工坊、本地 mod 目录、导出目录">路径设置</button>
+      <button id="openFolder" title="打开导出文件夹">打开文件夹</button>
+      <div class="mlabel">其他</div>
+      <button id="tr" title="用本地 AI 给 mod 补中文名和简介">翻译名称（本地 AI）</button>
+      <button id="btnTheme" title="深色 / 浅色界面切换（记住选择）">浅色模式</button>
+    </div>
   </span>
   <span class="spacer"></span>
   <span class="sbox" id="sBox">
     <input id="search" placeholder="搜索：名称 / 中文名 / 分类 / ID（空格分隔多个词）" spellcheck="false" autocomplete="off">
     <button id="sclear" title="清除搜索（Esc）">×</button>
   </span>
-  <a class="lnk" href="https://steamcommunity.com/app/602960/workshop/" target="_blank">创意工坊 ↗</a>
-  <a class="lnk" href="https://steamcommunity.com/my/myworkshopfiles/?appid=602960" target="_blank">我的订阅 ↗</a>
   <span class="hint" id="stat"></span>
   <button id="quit" class="quit" title="先保存到游戏，再关闭程序并退出后台服务">保存退出</button>
 </div>
@@ -460,6 +505,7 @@ function makeItem(m, i, isActive){
     const miss = isActive ? missingDeps(m) : [];
     const zhHtml = m.zh ? '<span class="cn">' + hlEsc(m.zh) + '</span> ' : '';
     const di = '①②③④⑤⑥⑦⑧'.indexOf(String(m.cat || '').charAt(0)) + 1;
+    if (di > 0) li.style.borderLeftColor = ['', '#25507d', '#4b3f80', '#1c6558', '#5f551d', '#1d5a78', '#6e4019', '#5c2f63', '#5f3636'][di];
     li.innerHTML =
         '<span class="grip" title="拖动调整顺序">≡</span>' +
         '<span class="idx"' + (isActive ? '' : ' title="拼音首字母"') + '>' + (isActive ? (i + 1) : (m.py || '')) + '</span>' +
@@ -611,6 +657,7 @@ function render(){
         : '共 ' + (active.length + idle.length) + ' 个 mod') + (actBytes ? (' · 已启用 ' + fmtMb(actBytes)) : '');
     const box = document.getElementById('sBox');
     if (box) box.classList.toggle('has', ts.length > 0);
+    if (typeof fitCols === 'function') fitCols();
 }
 
 function show(text, ok){
@@ -1269,7 +1316,8 @@ async function savesRefresh() {
         + '<button data-rs="' + esc(b.id) + '">恢复</button> <button data-db="' + esc(b.id) + '">删除</button></li>').join('');
     box.innerHTML = '<h3>存档管理</h3>' +
         '<div>单人存档和多人存档是<b>分开</b>的两套：单人在存档根目录，多人在 Multiplayer 子目录。恢复前会自动给当前存档再留一份。</div>' +
-        '<div class="hint">备份 / 方案存档都存在<b>独立的数据目录</b>：' + esc(d.dataDir || '') + '，跟软件安装目录分开（默认也不放 C 盘），更新版本、重装都不会被删掉。</div>' +
+        '<div class="hint">备份、方案存档、回滚历史、导出的 mod 都在软件目录里的<b>「数据」文件夹</b>：' + esc(d.dataDir || '') + '</div>' +
+        '<div class="hint">整个软件是一个自包含的包：把这个文件夹整个拷走就是完整备份；更新版本时会保留这个文件夹。</div>' +
         '<div id="svDataPick" style="display:none;margin-top:6px"></div>' +
         '<div class="pbtns">' +
         '<button id="svOpenSingle">打开单人存档文件夹</button>' +
@@ -1659,6 +1707,86 @@ document.getElementById('quit').onclick = async () => {
     try { await fetch('/api/quit'); } catch (e) { /* 服务可能已关闭 */ }
     window.close();
 };
+
+
+// ---------- 「更多」菜单 ----------
+(function () {
+    const wrap = document.getElementById('moreWrap');
+    const btn = document.getElementById('btnMore');
+    const menu = document.getElementById('moreMenu');
+    if (!wrap || !btn || !menu) return;
+    const close = () => { menu.style.display = 'none'; };
+    btn.onclick = (e) => { e.stopPropagation(); menu.style.display = (menu.style.display === 'block') ? 'none' : 'block'; };
+    menu.addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON') close(); });
+    document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+})();
+
+// ---------- 面板：同一时间只开一个，并统一右上角关闭 ----------
+const PANELS = ['subBox', 'saveBox', 'presetBox', 'linkBox', 'ovBox', 'histBox', 'jcBox', 'report', 'pathBox'];
+function panelHide(el) {
+    el.style.display = 'none';
+    if (el.id === 'pathBox') el.classList.remove('show');
+}
+function panelShown(el) {
+    return el.style.display === 'block' || (el.id === 'pathBox' && el.classList.contains('show'));
+}
+function panelAddClose(el) {
+    if (el.querySelector(':scope > .pclose')) return;
+    const b = document.createElement('button');
+    b.className = 'pclose'; b.title = '关闭'; b.textContent = '×';
+    el.insertAdjacentElement('afterbegin', b);
+}
+if (window.MutationObserver) {
+    new MutationObserver(list => {
+        let opened = false;
+        for (const m of list) {
+            const el = m.target;
+            if (!el.id || PANELS.indexOf(el.id) < 0) continue;
+            if (panelShown(el)) {
+                PANELS.forEach(id => {
+                    if (id === el.id) return;
+                    const o = document.getElementById(id);
+                    if (o && panelShown(o)) panelHide(o);
+                });
+                panelAddClose(el);
+                opened = true;
+            }
+        }
+        if (opened) fitCols();
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+}
+document.addEventListener('click', (e) => {
+    const b = e.target.closest ? e.target.closest('.pclose') : null;
+    if (!b) return;
+    const p = b.parentElement;
+    if (!p) return;
+    panelHide(p);
+    fitCols();
+});
+
+// ---------- 两栏高度跟着视口走 ----------
+function fitCols() {
+    const cols = document.querySelector('.cols');
+    if (!cols) return;
+    if (window.innerWidth <= 1000) { cols.style.height = 'auto'; return; }
+    const top = cols.getBoundingClientRect().top + window.scrollY;
+    const h = Math.max(360, window.innerHeight - top - 26);
+    cols.style.height = h + 'px';
+}
+window.addEventListener('resize', () => {
+    clearTimeout(window.__fitT);
+    window.__fitT = setTimeout(fitCols, 90);
+});
+window.addEventListener('load', fitCols);
+fitCols();
+
+// 条目左侧按分类着色
+const CAT_BAR = ['', '#25507d', '#4b3f80', '#1c6558', '#5f551d', '#1d5a78', '#6e4019', '#5c2f63', '#5f3636'];
+function paintCat(li, cat) {
+    const i = '①②③④⑤⑥⑦⑧'.indexOf(String(cat || '').charAt(0)) + 1;
+    if (i > 0) li.style.borderLeftColor = CAT_BAR[i];
+}
 
 load().catch(e => show('加载失败：' + e.message + '（后台服务没起来？刷新页面或重新双击 潜渊症Mod管理器.vbs）', false));
 refreshShare();
