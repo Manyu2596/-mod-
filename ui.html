@@ -115,6 +115,8 @@ li.over{border-color:#6366f1}
   <input type="file" id="zipFile" accept=".zip" style="display:none">
   <button id="btnPresets">mod方案存档</button>
   <button id="btnSaves">存档管理</button>
+  <button id="btnOv" title="查看已启用 mod 之间谁覆盖了谁，可一键换顺序">覆盖关系</button>
+  <button id="btnHist" title="每次保存前的配置备份，可一键回滚">配置回滚</button>
   <button id="tr">翻译名称（本地 AI）</button>
   <span class="sbox" id="sBox">
     <input id="search" placeholder="搜索 mod：名称 / 中文名 / 分类 / ID" spellcheck="false" autocomplete="off">
@@ -131,6 +133,8 @@ li.over{border-color:#6366f1}
 <div class="report" id="saveBox" style="display:none"></div>
 <div class="report" id="presetBox" style="display:none"></div>
 <div class="report" id="linkBox" style="display:none"></div>
+<div class="report" id="ovBox" style="display:none"></div>
+<div class="report" id="histBox" style="display:none"></div>
 <div class="report" id="report"></div>
 
 <div class="paths" id="pathBox">
@@ -159,7 +163,7 @@ li.over{border-color:#6366f1}
     <ul id="activeList"></ul>
   </div>
   <div class="col">
-    <h2>② 未启用<span id="ci"></span><span class="btns"><button id="enableAll" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用</button></span></h2>
+    <h2>② 未启用<span id="ci"></span><span class="btns"><button id="sortSize" class="colbtn" title="未启用列表在拼音 / 体积之间切换排序">按体积</button><button id="enableAll" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用</button></span></h2>
     <div class="hint">不参与加载 · 按名称首字母拼音 A→Z 排列（左侧字母即首字母），启用后会自动插入左栏合适位置</div>
     <ul id="idleList"></ul>
   </div>
@@ -172,12 +176,14 @@ let curPaths = null;
 let query = '';   // 搜索关键词
 
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function fmtMb(b){b=Number(b)||0;return b>=1073741824?(b/1073741824).toFixed(2)+' GB':(b/1048576).toFixed(0)+' MB';}
 
 async function load(){
     const r = await fetch('/api/data');
     const d = await r.json();
     active = d.active || []; idle = d.idle || [];
     curPaths = d.paths || null;
+    applyIdleSort();
     render();
     fillPaths();
 }
@@ -224,7 +230,7 @@ function makeItem(m, i, isActive){
         '<div class="info"><div class="nm">' + zhHtml + esc(m.name) +
         (danger ? ' <span class="tagd">旧框架·建议停用</span>' : '') +
         (miss.length ? ' <span class="tagw" title="' + esc(miss.map(x => x.why).join('；')) + '">缺前置：' + esc(miss.map(x => x.name).join('、')) + '</span>' : '') +
-        '</div><div class="meta">' + esc(m.cat) + ' · v' + m.modversion + '</div>' +
+        '</div><div class="meta">' + esc(m.cat) + ' · v' + m.modversion + (m.sizeText ? (' · ' + m.sizeText + (m.files ? (' / ' + m.files + ' 文件') : '')) : '') + '</div>' +
         (m.desc ? '<div class="dsc" title="' + esc(m.desc) + '">' + esc(m.desc) + '</div>' : '') +
         '</div>' +
         '<a class="go" href="' + (m.workshop || '#') + '" target="_blank" rel="noopener">创意工坊 ↗</a>' +
@@ -346,9 +352,10 @@ function render(){
         ts.length ? (na + ' / ' + active.length + ' 个') : (active.length + ' 个');
     document.getElementById('ci').textContent =
         ts.length ? (nb + ' / ' + idle.length + ' 个') : (idle.length + ' 个');
-    document.getElementById('stat').textContent = ts.length
+    const actBytes = active.reduce((s, m) => s + (m.sizeBytes || 0), 0);
+    document.getElementById('stat').textContent = (ts.length
         ? '匹配 ' + (na + nb) + ' / 共 ' + (active.length + idle.length) + ' 个 mod'
-        : '共 ' + (active.length + idle.length) + ' 个 mod';
+        : '共 ' + (active.length + idle.length) + ' 个 mod') + (actBytes ? (' · 已启用 ' + fmtMb(actBytes)) : '');
     const box = document.getElementById('sBox');
     if (box) box.classList.toggle('has', ts.length > 0);
 }
@@ -1015,6 +1022,109 @@ document.getElementById('btnSaves').onclick = async () => {
     await savesRefresh();
 };
 
+// ---------- 未启用列表排序方式（拼音 / 体积）----------
+let idleSort = 'py';
+function sortIdlePinyin() {
+    idle.sort((a, b) => {
+        const la = a.py || '#', lb = b.py || '#';
+        if (la !== lb) return la < lb ? -1 : 1;
+        return String(a.zh || a.name).localeCompare(String(b.zh || b.name), 'zh', { numeric: true, sensitivity: 'base' });
+    });
+}
+function applyIdleSort() {
+    if (idleSort === 'size') idle.sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0));
+    else sortIdlePinyin();
+}
+document.getElementById('sortSize').onclick = () => {
+    idleSort = idleSort === 'size' ? 'py' : 'size';
+    document.getElementById('sortSize').textContent = idleSort === 'size' ? '按拼音' : '按体积';
+    applyIdleSort();
+    render();
+    show(idleSort === 'size' ? '未启用列表已按体积从大到小排列' : '未启用列表已恢复拼音 A→Z 排列', true);
+};
+
+// ---------- 覆盖关系：谁盖住了谁 ----------
+async function ovRefresh() {
+    const box = document.getElementById('ovBox');
+    box.innerHTML = '<h3>分析中...</h3>'; box.style.display = 'block';
+    try {
+        const r = await fetch('/api/overrides');
+        const d = await r.json();
+        if (!d.ok) { box.innerHTML = '<h3>分析失败</h3>' + esc(d.error || ''); return; }
+        if (!d.pairs.length) {
+            box.innerHTML = '<h3>覆盖关系</h3><div>已启用的 ' + d.scanned + ' 个 mod 之间没有发现内容重叠，顺序上不存在互相覆盖。</div>' +
+                '<div class="pbtns"><button id="ovClose">关闭</button></div>';
+            document.getElementById('ovClose').onclick = () => { box.style.display = 'none'; };
+            return;
+        }
+        box.innerHTML = '<h3>覆盖关系（谁盖住了谁）</h3>' +
+            '<div>越靠后加载优先级越高。下面是实测到内容重叠的 ' + d.pairs.length + ' 组，每组都给了「让前一个生效」的按钮。</div><ul>' +
+            d.pairs.map((p, i) => '<li><b>' + esc(p.b.name) + '</b> 覆盖了 <b>' + esc(p.a.name) + '</b> 的 ' + p.count + ' 处' +
+                '<div class="hint">' + esc(p.idents.join('、')) + (p.count > p.idents.length ? ' 等' : '') + '</div>' +
+                '<button data-ova="' + esc(p.a.id) + '" data-ovb="' + esc(p.b.id) + '">让「' + esc(p.a.name) + '」生效</button></li>').join('') +
+            '</ul><div class="pbtns"><button id="ovClose">关闭</button>' +
+            '<span class="hint">只改顺序，不动别的；改完点「保存到游戏」写入</span></div>';
+        box.querySelectorAll('[data-ova]').forEach(b => {
+            b.onclick = () => {
+                const ai = active.findIndex(m => String(m.id) === String(b.dataset.ova));
+                const bi = active.findIndex(m => String(m.id) === String(b.dataset.ovb));
+                if (ai < 0 || bi < 0) return;
+                const a = active[ai], bname = active[bi].zh || active[bi].name;
+                active.splice(ai, 1);
+                const nb = active.findIndex(m => String(m.id) === String(b.dataset.ovb));
+                active.splice(nb + 1, 0, a);
+                render();
+                show('已把「' + (a.zh || a.name) + '」移到「' + bname + '」之后，现在由它生效。点「保存到游戏」写入', true);
+            };
+        });
+        document.getElementById('ovClose').onclick = () => { box.style.display = 'none'; };
+    } catch (e) { box.innerHTML = '<h3>分析失败</h3>' + esc(e.message); }
+}
+document.getElementById('btnOv').onclick = () => {
+    const box = document.getElementById('ovBox');
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+    document.getElementById('histBox').style.display = 'none';
+    ovRefresh();
+};
+
+// ---------- 配置回滚 ----------
+async function histRefresh() {
+    const box = document.getElementById('histBox');
+    box.innerHTML = '<h3>读取中...</h3>'; box.style.display = 'block';
+    try {
+        const r = await fetch('/api/config/history');
+        const d = await r.json();
+        if (!d.ok) { box.innerHTML = '<h3>读取失败</h3>' + esc(d.error || ''); return; }
+        const items = d.items || [];
+        if (!items.length) {
+            box.innerHTML = '<h3>配置回滚</h3><div>还没有历史记录。每次点「保存到游戏」都会自动留一份（最多 12 份）。</div>' +
+                '<div class="pbtns"><button id="histClose">关闭</button></div>';
+            document.getElementById('histClose').onclick = () => { box.style.display = 'none'; };
+            return;
+        }
+        box.innerHTML = '<h3>配置回滚</h3><div>下面是最近 ' + items.length + ' 份保存前的配置，恢复前会自动再备份一次当前配置。</div><ul>' +
+            items.map((h, i) => '<li><b>' + esc(h.time) + '</b> <span class="hint">' + h.count + ' 个 mod · ' + esc((h.names || []).slice(0, 3).join('、')) + '</span>' +
+                ' <button data-hr="' + esc(h.file) + '">恢复这份</button>' + (i === 0 ? ' <span class="hint">← 撤销上次保存</span>' : '') + '</li>').join('') +
+            '</ul><div class="pbtns"><button id="histClose">关闭</button></div>';
+        box.querySelectorAll('[data-hr]').forEach(b => { b.onclick = () => histRestore(b.dataset.hr); });
+        document.getElementById('histClose').onclick = () => { box.style.display = 'none'; };
+    } catch (e) { box.innerHTML = '<h3>读取失败</h3>' + esc(e.message); }
+}
+async function histRestore(file) {
+    if (!confirm('恢复到这份配置？\n\n当前配置会先自动备份一份（config_player.xml.bak）。')) return;
+    try {
+        const r = await fetch('/api/config/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file }) });
+        const d = await r.json();
+        if (d.ok) { show('已恢复配置：' + d.count + ' 个 mod', true); await load(); await histRefresh(); }
+        else show('恢复失败：' + d.error, false);
+    } catch (e) { show('恢复失败：' + e.message, false); }
+}
+document.getElementById('btnHist').onclick = () => {
+    const box = document.getElementById('histBox');
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+    document.getElementById('ovBox').style.display = 'none';
+    histRefresh();
+};
 document.getElementById('btnPresets').onclick = async () => {
     const box = document.getElementById('presetBox');
     if (box.style.display === 'block') { box.style.display = 'none'; return; }

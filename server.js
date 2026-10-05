@@ -230,6 +230,94 @@ function sortByPinyin(arr) {
     });
     return arr;
 }
+// ---------- mod 体积缓存（首次扫描后落盘，之后按 id+版本 复用）----------
+const SIZE_CACHE = path.join(__dirname, 'modsize.json');
+let __sizeCache = null, __sizeDirty = false;
+function loadSizeCache() {
+    if (__sizeCache) return __sizeCache;
+    try { __sizeCache = JSON.parse(fs.readFileSync(SIZE_CACHE, 'utf8')); } catch (e) { __sizeCache = {}; }
+    return __sizeCache;
+}
+function saveSizeCache() {
+    if (!__sizeDirty || !__sizeCache) return;
+    try { fs.writeFileSync(SIZE_CACHE, JSON.stringify(__sizeCache), 'utf8'); } catch (e) { }
+    __sizeDirty = false;
+}
+function dirStats(dir) {
+    let bytes = 0, files = 0;
+    const stack = [dir];
+    while (stack.length) {
+        const d = stack.pop();
+        let ents = [];
+        try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { continue; }
+        for (const e of ents) {
+            const p = path.join(d, e.name);
+            if (e.isDirectory()) { stack.push(p); continue; }
+            files++;
+            try { bytes += fs.statSync(p).size; } catch (err) { }
+        }
+    }
+    return { bytes, files };
+}
+function modStats(id, a, base) {
+    const cache = loadSizeCache();
+    const key = String(id) + '|' + String((a && a.modversion) || '-');
+    if (cache[key] && typeof cache[key].bytes === 'number') return cache[key];
+    const s = dirStats(path.join(base, id));
+    cache[key] = { bytes: s.bytes, files: s.files, ts: Date.now() };
+    __sizeDirty = true;
+    return cache[key];
+}
+function fmtSize(b) {
+    b = Number(b) || 0;
+    if (b >= 1024 * 1024 * 1024) return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    if (b >= 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+    return b + ' B';
+}
+
+// ---------- 覆盖关系：谁盖住了谁（按真实标识符比对，不靠名字猜）----------
+function modDirOf(m) {
+    const P = getPaths();
+    const w = path.join(P.WORKSHOP, String(m.id));
+    if (fs.existsSync(path.join(w, 'filelist.xml'))) return w;
+    if (P.LOCALMODS) {
+        const l = path.join(P.LOCALMODS, String(m.id));
+        if (fs.existsSync(path.join(l, 'filelist.xml'))) return l;
+    }
+    return w;
+}
+function collectIdentifiers(mods) {
+    const vanilla = vanillaIdentifiers();
+    const map = {};
+    mods.forEach(m => {
+        const dir = modDirOf(m);
+        const fl = path.join(dir, 'filelist.xml');
+        if (!fs.existsSync(fl)) return;
+        let xml;
+        try { xml = fs.readFileSync(fl, 'utf8'); } catch (e) { return; }
+        const seen = new Set();
+        let scanned = 0;
+        for (const f of xml.matchAll(/<\w+\s+file="([^"]+)"/g)) {
+            if (scanned++ > 80) break;
+            const rel = f[1].replace('%ModDir%', '').replace(/^[/\\]/, '');
+            const p = path.join(dir, rel);
+            try {
+                if (!fs.existsSync(p)) continue;
+                if (fs.statSync(p).size > 2 * 1024 * 1024) continue;
+                const s = fs.readFileSync(p, 'utf8');
+                const re = new RegExp('<(?:' + DEF_TAGS + ')\\b[^>]*?identifier="([^"]+)"', 'g');
+                let r;
+                while ((r = re.exec(s)) !== null) {
+                    if (seen.has(r[1]) || vanilla.has(r[1])) continue;
+                    seen.add(r[1]);
+                    (map[r[1]] = map[r[1]] || []).push(String(m.id));
+                }
+            } catch (e) { }
+        }
+    });
+    return map;
+}
 // ---------- 扫描所有 mod ----------
 function buildData() {
     const enabledIds = loadEnabledIds();
@@ -256,6 +344,7 @@ function buildData() {
             const a = analyze(id, base);
             if (!a) return;
             seen.add(id);
+            const st = modStats(id, a, base);
             const c = classify(a);
             const patchBonus = /补丁|patch/i.test(a.name) ? -0.5 : 0;
             const u = userZh[id] || {};
@@ -270,6 +359,7 @@ function buildData() {
                 desc: u.desc || (zhAll[id] && zhAll[id].desc) || autoPurpose(a),
                 workshop: numId ? ('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id) : '',
                 local: !numId,
+                sizeBytes: st.bytes, files: st.files, sizeText: fmtSize(st.bytes),
             }));
         });
     };
@@ -288,6 +378,7 @@ function buildData() {
     sortByPinyin(idle);                       // 未启用：按名称首字母拼音 A→Z，方便按字母翻找
     idle.forEach(m => { m.py = pyLetterOf(m); });
 
+    saveSizeCache();
     return { active, idle, trans: loadTrans() };
 }
 
@@ -309,6 +400,18 @@ function save(list, allowEmpty) {
         }
         fs.writeFileSync(cp + '.bak', xml, 'utf8');
     } catch (e) { /* 备份失败不阻断保存 */ }
+
+    // 历史快照：保留最近 12 份，供面板「配置回滚」使用
+    try {
+        const hd = path.join(__dirname, 'confighistory');
+        fs.mkdirSync(hd, { recursive: true });
+        const d = new Date();
+        const p2 = n => String(n).padStart(2, '0');
+        const stamp = d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds());
+        fs.writeFileSync(path.join(hd, 'config_' + stamp + '.xml'), xml, 'utf8');
+        const all = fs.readdirSync(hd).filter(f => /^config_.*\.xml$/.test(f)).sort().reverse();
+        all.slice(12).forEach(f => { try { fs.unlinkSync(path.join(hd, f)); } catch (e) { } });
+    } catch (e) { }
 
     // 需要在配置里但原本没有的 mod：从 Installed 目录补一条
     const INSTALLED = getPaths().INSTALLED;
@@ -1039,6 +1142,98 @@ const server = http.createServer((req, res) => {
 
     // 联机自检：游戏联机时用的是 Installed 目录（不是工坊下载目录），
     // mod 没同步过去、或两边版本不一致，加入别人游戏就会被要求重新下载
+    // 覆盖关系：已启用 mod 之间谁覆盖了谁（按真实标识符，不靠名字猜）
+    if (url === '/api/overrides') {
+        try {
+            const data = buildData();
+            const enabled = data.active;                 // 已是当前加载顺序
+            const map = collectIdentifiers(enabled);
+            const pos = {};
+            enabled.forEach((m, i) => { pos[String(m.id)] = i; });
+            const pairs = {};
+            Object.keys(map).forEach(ident => {
+                const ids = map[ident];
+                if (ids.length < 2) return;
+                const ord = ids.map(x => pos[x]).filter(i => i !== undefined).sort((a, b) => a - b);
+                for (let i = 0; i + 1 < ord.length; i++) {
+                    const A = enabled[ord[i]], B = enabled[ord[i + 1]];
+                    if (!A || !B) continue;
+                    const key = String(A.id) + '>' + String(B.id);
+                    if (!pairs[key]) pairs[key] = {
+                        a: { id: A.id, name: A.zh || A.name },
+                        b: { id: B.id, name: B.zh || B.name },
+                        idents: [],
+                    };
+                    pairs[key].idents.push(ident);
+                }
+            });
+            const out = Object.keys(pairs).map(k => ({
+                a: pairs[k].a, b: pairs[k].b,
+                count: pairs[k].idents.length,
+                idents: pairs[k].idents.slice(0, 8),
+            })).sort((x, y) => y.count - x.count).slice(0, 30);
+            send(res, 200, JSON.stringify({ ok: true, pairs: out, scanned: enabled.length }));
+        } catch (e) {
+            send(res, 200, JSON.stringify({ ok: false, error: e.message }));
+        }
+        return;
+    }
+
+    // 配置历史（每次保存到游戏前自动留一份）
+    if (url === '/api/config/history') {
+        try {
+            const hd = path.join(__dirname, 'confighistory');
+            const items = [];
+            if (fs.existsSync(hd)) {
+                fs.readdirSync(hd).filter(f => /^config_.*\.xml$/.test(f)).sort().reverse().forEach(f => {
+                    let txt = '';
+                    try { txt = fs.readFileSync(path.join(hd, f), 'utf8'); } catch (e) { return; }
+                    const m = txt.match(/<regularpackages>([\s\S]*?)<\/regularpackages>/);
+                    let count = 0;
+                    if (m) { const re = /<package\s/g; while (re.exec(m[1])) count++; }
+                    const names = [];
+                    const nre = /<!--([\s\S]*?)-->/g;
+                    let r;
+                    while ((r = nre.exec(txt)) !== null) { const s2 = r[1].trim(); if (s2) names.push(s2); }
+                    items.push({
+                        file: f,
+                        time: f.replace(/^config_/, '').replace(/\.xml$/, '').replace('-', ' '),
+                        count, names: names.slice(0, 4),
+                    });
+                });
+            }
+            send(res, 200, JSON.stringify({ ok: true, items }));
+        } catch (e) {
+            send(res, 200, JSON.stringify({ ok: false, error: e.message }));
+        }
+        return;
+    }
+
+    if (url === '/api/config/restore' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = JSON.parse(raw);
+                const file = String((b && b.file) || '');
+                if (!/^config_[A-Za-z0-9\-_]+\.xml$/.test(file)) return send(res, 200, JSON.stringify({ ok: false, error: '备份名不合法' }));
+                const hd = path.join(__dirname, 'confighistory');
+                const f = path.join(hd, file);
+                if (!fs.existsSync(f)) return send(res, 200, JSON.stringify({ ok: false, error: '找不到这份备份' }));
+                const cp = configPath();
+                try { fs.writeFileSync(cp + '.bak', fs.readFileSync(cp, 'utf8')); } catch (e) { }
+                const txt = fs.readFileSync(f, 'utf8');
+                fs.writeFileSync(cp, txt, 'utf8');
+                const m = txt.match(/<regularpackages>([\s\S]*?)<\/regularpackages>/);
+                let count = 0;
+                if (m) { const re = /<package\s/g; while (re.exec(m[1])) count++; }
+                send(res, 200, JSON.stringify({ ok: true, count }));
+            } catch (e) {
+                send(res, 200, JSON.stringify({ ok: false, error: e.message }));
+            }
+        });
+        return;
+    }
     if (url === '/api/joincheck') {
         try { send(res, 200, JSON.stringify(Object.assign({ ok: true }, joinCheck()))); }
         catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
