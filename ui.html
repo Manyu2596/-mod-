@@ -265,7 +265,40 @@ let dragFrom = null, dragId = null;
 let curPaths = null;
 let query = '';   // 搜索关键词
 
-function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+// 搜索命中高亮（先转义，再用控制字符做标记，避免关键词命中到标签本身）
+function hlEsc(s){
+    const t = esc(s);
+    const ts = tokens();
+    if (!ts.length) return t;
+    let out = t;
+    ts.forEach(w => {
+        const re = new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        out = out.replace(re, '\u0001$&\u0002');
+    });
+    return out.replace(/\u0001/g, '<span class="hit">').replace(/\u0002/g, '</span>');
+}
+// 当前过滤后可见的列表（拖拽 / 上下移都按可见顺序走，避免搜索时“点了没反应”）
+function visibleArr(isActive){
+    const ts = tokens();
+    return (isActive ? active : idle).filter(m => matchMod(m, ts));
+}
+// 把 mod 移动到可见相邻项的前/后（dir=-1 上移，1 下移）
+function moveStep(m, isActive, dir){
+    const arr = isActive ? active : idle;
+    const vis = visibleArr(isActive);
+    const vi = vis.findIndex(x => x.id === m.id);
+    const tj = vi + dir;
+    if (vi < 0 || tj < 0 || tj >= vis.length) return false;
+    const target = vis[tj];
+    const from = arr.findIndex(x => x.id === m.id);
+    if (from < 0) return false;
+    const it = arr.splice(from, 1)[0];
+    const to = arr.findIndex(x => x.id === target.id);
+    if (to < 0) { arr.splice(from, 0, it); return false; }
+    arr.splice(dir < 0 ? to : to + 1, 0, it);
+    return true;
+}
 function fmtMb(b){b=Number(b)||0;return b>=1073741824?(b/1073741824).toFixed(2)+' GB':(b/1048576).toFixed(0)+' MB';}
 
 async function load(){
@@ -313,31 +346,25 @@ function makeItem(m, i, isActive){
     li.dataset.id = m.id;
     const danger = /csforbarotrauma/i.test(m.name) && !/luacs/i.test(m.name);
     const miss = isActive ? missingDeps(m) : [];
-    const zhHtml = m.zh ? '<span class="cn">' + esc(m.zh) + '</span> ' : '';
+    const zhHtml = m.zh ? '<span class="cn">' + hlEsc(m.zh) + '</span> ' : '';
     const di = '①②③④⑤⑥⑦⑧'.indexOf(String(m.cat || '').charAt(0)) + 1;
     li.innerHTML =
         '<span class="grip" title="拖动调整顺序">≡</span>' +
         '<span class="idx"' + (isActive ? '' : ' title="拼音首字母"') + '>' + (isActive ? (i + 1) : (m.py || '')) + '</span>' +
-        '<div class="info"><div class="nm">' + zhHtml + esc(m.name) +
+        '<div class="info"><div class="nm">' + zhHtml + hlEsc(m.name) +
         (danger ? ' <span class="tagd">旧框架·建议停用</span>' : '') +
         (miss.length ? ' <span class="tagw" title="' + esc(miss.map(x => x.why).join('；')) + '">缺前置：' + esc(miss.map(x => x.name).join('、')) + '</span>' : '') +
-        '</div><div class="meta">' + (di ? '<span class="catb ct' + di + '">' + esc(m.cat) + '</span>' : esc(m.cat)) + ' · v' + m.modversion + (m.sizeText ? (' · ' + m.sizeText + (m.files ? (' / ' + m.files + ' 文件') : '')) : '') + '</div>' +
-        (m.desc ? '<div class="dsc" title="' + esc(m.desc) + '">' + esc(m.desc) + '</div>' : '') +
+        '</div><div class="meta">' + (di ? '<span class="catb ct' + di + '">' + hlEsc(m.cat) + '</span>' : hlEsc(m.cat)) + ' · v' + esc(m.modversion) + (m.sizeText ? (' · ' + esc(m.sizeText) + (m.files ? (' / ' + esc(m.files) + ' 文件') : '')) : '') + '</div>' +
+        (m.desc ? '<div class="dsc" title="' + esc(m.desc) + '">' + hlEsc(m.desc) + '</div>' : '') +
         '</div>' +
-        '<a class="go" href="' + (m.workshop || '#') + '" target="_blank" rel="noopener" title="在创意工坊打开这个 mod">创意工坊 ↗</a>' +
+        (m.workshop ? '<a class="go" href="' + esc(m.workshop) + '" target="_blank" rel="noopener" title="在创意工坊打开这个 mod">创意工坊 ↗</a>' : '') +
         (isActive ? '<span class="moves"><button class="mv" data-mv="-1" title="上移一位">↑</button><button class="mv" data-mv="1" title="下移一位">↓</button></span>' : '') +
         '<button class="tog tr2" title="手动补充/修改中文名与简介">译</button>' +
         (miss.length ? '<button class="tog filldep">补前置</button>' : '') +
         '<button class="tog tgs">' + (isActive ? '停用' : '启用') + '</button>';
 
     li.querySelectorAll('[data-mv]').forEach(b => {
-        b.onclick = () => {
-            const k = active.findIndex(x => x.id === m.id);
-            const to = k + Number(b.dataset.mv);
-            if (k < 0 || to < 0 || to >= active.length) return;
-            active.splice(to, 0, active.splice(k, 1)[0]);
-            render();
-        };
+        b.onclick = () => { if (moveStep(m, isActive, Number(b.dataset.mv))) render(); };
     });
 
     const fdep = li.querySelector('.filldep');
@@ -392,12 +419,22 @@ function makeItem(m, i, isActive){
     li.ondragover = e => { e.preventDefault(); clearOver(); li.classList.add('over'); };
     li.ondrop = e => {
         e.preventDefault();
-        if (dragFrom !== (isActive ? 'a' : 'i')) return;
+        const side = isActive ? 'a' : 'i';
+        const id = dragId;
+        dragFrom = null; dragId = null; clearOver();
+        if (dragFrom !== side && !id) return;
+        if (!id || id === m.id) return;
         const arr = isActive ? active : idle;
-        const from = arr.findIndex(x => x.id === dragId);
+        const vis = visibleArr(isActive);
+        const viFrom = vis.findIndex(x => x.id === id);
+        const viTo = vis.findIndex(x => x.id === m.id);
+        if (viFrom < 0 || viTo < 0 || viFrom === viTo) return;
+        const k = arr.findIndex(x => x.id === id);
+        if (k < 0) return;
+        const it = arr.splice(k, 1)[0];
         const to = arr.findIndex(x => x.id === m.id);
-        if (from < 0 || to < 0 || from === to) return;
-        arr.splice(to, 0, arr.splice(from, 1)[0]);
+        if (to < 0) { arr.splice(k, 0, it); return; }
+        arr.splice(viFrom < viTo ? to + 1 : to, 0, it);
         render();
     };
     return li;
@@ -486,9 +523,10 @@ document.getElementById('sclear').onclick = () => { setQuery(''); sInput.focus()
 // Ctrl+F 或 / 快速聚焦搜索框（在输入框里打字时不拦截）
 document.addEventListener('keydown', e => {
     const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+    if (typing) return;                       // 打字时不抢浏览器快捷键
     if (e.ctrlKey && e.key === 'f') { e.preventDefault(); sInput.focus(); sInput.select(); return; }
     if (e.ctrlKey && (e.key === 's' || e.key === 'S')) { e.preventDefault(); document.getElementById('save').click(); return; }
-    if (!typing && e.key === '/') { e.preventDefault(); sInput.focus(); }
+    if (e.key === '/') { e.preventDefault(); sInput.focus(); }
 });
 
 // 把当前两栏列表写入游戏配置，返回 { ok, saved, error }
@@ -508,16 +546,17 @@ document.getElementById('clearMods').onclick = async () => {
     if (!active.length) { show('当前已经没有启用的 mod 了', true); return; }
     if (!confirm('确定停用全部 ' + active.length + ' 个 mod 吗？\n\n会写入游戏配置（原文件备份为 config_player.xml.bak），之后可在右栏重新启用。')) return;
     const btn = document.getElementById('clearMods');
+    const bakA = active.slice(), bakI = idle.slice();
     btn.disabled = true; btn.textContent = '清空中...';
     try {
         idle = active.concat(idle);
         active = [];
         render();
         const d = await saveNow(true);
-        if (d.ok) show('已清空：全部 mod 已停用并写入游戏配置。想恢复可在右栏重新启用，或用「mod方案存档」切回', true);
-        else show('清空失败：' + d.error, false);
-    } catch (e) { show('清空失败：' + e.message, false); }
-    btn.disabled = false; btn.textContent = '清空';
+        if (d.ok) { show('已清空：全部 mod 已停用并写入游戏配置。想恢复可在右栏重新启用，或用「mod方案存档」切回', true); }
+        else { active = bakA; idle = bakI; render(); show('清空失败（界面已还原）：' + d.error, false); }
+    } catch (e) { active = bakA; idle = bakI; render(); show('清空失败（界面已还原）：' + e.message, false); }
+    finally { btn.disabled = false; btn.textContent = '清空'; }
 };
 
 // 一键启用：右栏全部移到左栏末尾并写入游戏配置（左栏表头和右栏表头两个按钮共用）
@@ -526,15 +565,16 @@ async function enableAllMods() {
     const btns = ['enableAll', 'enableAllTop'].map(function (i) { return document.getElementById(i); }).filter(Boolean);
     const texts = btns.map(function (b) { return b.textContent; });
     btns.forEach(function (b) { b.disabled = true; b.textContent = '启用中...'; });
+    const bakA = active.slice(), bakI = idle.slice();
     try {
         active = active.concat(idle);
         idle = [];
         render();
         const d = await saveNow(true);
-        if (d.ok) show('已启用全部 mod 并写入游戏配置（新启用的排在列表末尾，可拖动调整顺序）', true);
-        else show('启用失败：' + d.error, false);
-    } catch (e) { show('启用失败：' + e.message, false); }
-    btns.forEach(function (b, i) { b.disabled = false; b.textContent = texts[i]; });
+        if (d.ok) { show('已启用全部 mod 并写入游戏配置（新启用的排在列表末尾，可拖动调整顺序）', true); }
+        else { active = bakA; idle = bakI; render(); show('启用失败（界面已还原）：' + d.error, false); }
+    } catch (e) { active = bakA; idle = bakI; render(); show('启用失败（界面已还原）：' + e.message, false); }
+    finally { btns.forEach(function (b, i) { b.disabled = false; b.textContent = texts[i]; }); }
 }
 document.getElementById('enableAll').onclick = function () { enableAllMods(); };
 document.getElementById('enableAllTop').onclick = function () { enableAllMods(); };
@@ -546,16 +586,16 @@ document.getElementById('joinCheck').onclick = async () => {
     try {
         const r = await fetch('/api/joincheck');
         const d = await r.json();
-        if (!d.ok) { show('检查失败：' + d.error, false); return; }
-        if (!d.problems.length) {
+        if (!d.ok) { show('检查失败：' + d.error, false); }
+        else if (!d.problems.length) {
             show('联机自检通过：' + d.total + ' 个启用 mod 都已在游戏加载目录、版本与工坊一致，加入别人游戏不会再要求重新下载', true);
-            return;
+        } else {
+            const txt = d.problems.map((p, i) => (i + 1) + '. ' + p.name + ' — ' + p.why).join('\n');
+            alert('发现 ' + d.problems.length + ' 个可能导致联机时要求重新下载的问题：\n\n' + txt);
+            show('发现 ' + d.problems.length + ' 个问题（明细见弹窗）：建议先处理再联机', false);
         }
-        const txt = d.problems.map((p, i) => (i + 1) + '. ' + p.name + ' — ' + p.why).join('\n');
-        alert('发现 ' + d.problems.length + ' 个可能导致联机时要求重新下载的问题：\n\n' + txt);
-        show('发现 ' + d.problems.length + ' 个问题（明细见弹窗）：建议先处理再联机', false);
     } catch (e) { show('检查失败：' + e.message, false); }
-    btn.disabled = false; btn.textContent = old;
+    finally { btn.disabled = false; btn.textContent = old; }
 };
 
 document.getElementById('save').onclick = async () => {
@@ -830,7 +870,8 @@ function renderSubscribe(list){
 async function presetRefresh(){
     const box = document.getElementById('presetBox');
     let d = {};
-    try { const r = await fetch('/api/presets/list'); d = await r.json(); } catch (e) { box.innerHTML = '读取方案失败：' + e.message; return; }
+    try { const r = await fetch('/api/presets/list'); d = await r.json(); }
+    catch (e) { box.innerHTML = '读取方案失败：' + esc(e.message); box.style.display = 'block'; return; }
     if (!d.ok) { box.innerHTML = '读取方案失败：' + d.error; box.style.display = 'block'; return; }
     const rows = (d.presets || []).map(p => {
         const t = new Date(p.savedAt).toLocaleString('zh-CN', { hour12: false });
@@ -1320,10 +1361,10 @@ document.getElementById('importMods').onclick = async () => {
     try {
         const r = await fetch('/api/share/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) });
         const d = await r.json();
-        if (!d.ok) { show('导入失败：' + d.error, false); return; }
-        await applyImported(d);
+        if (!d.ok) { show('导入失败：' + d.error, false); }
+        else { await applyImported(d); applyIdleSort(); render(); }
     } catch (e) { show('导入失败：' + e.message, false); }
-    btn.disabled = false; btn.textContent = '导入mod文件';
+    finally { btn.disabled = false; btn.textContent = '导入mod文件'; }
 };
 // 直接选别人发来的 zip 导入（不用先解压、再去路径设置里填路径）
 document.getElementById('importZip').onclick = () => { document.getElementById('zipFile').click(); };
@@ -1340,10 +1381,10 @@ document.getElementById('zipFile').onchange = async (e) => {
         for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
         const r = await fetch('/api/share/import-zip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, data: btoa(bin) }) });
         const d = await r.json();
-        if (!d.ok) { show('导入失败：' + d.error, false); return; }
-        await applyImported(d);
+        if (!d.ok) { show('导入失败：' + d.error, false); }
+        else { await applyImported(d); applyIdleSort(); render(); }
     } catch (err) { show('导入失败：' + err.message, false); }
-    btn.disabled = false; btn.textContent = '导入zip包';
+    finally { btn.disabled = false; btn.textContent = '导入zip包'; }
 };
 
 
@@ -1426,7 +1467,7 @@ document.getElementById('quit').onclick = async () => {
     window.close();
 };
 
-load();
+load().catch(e => show('加载失败：' + e.message + '（后台服务没起来？刷新页面或重新双击 潜渊症Mod管理器.vbs）', false));
 refreshShare();
 </script>
 </body>

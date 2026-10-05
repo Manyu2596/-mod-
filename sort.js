@@ -269,7 +269,8 @@ function detectSeries(mods) {
         const sameBase = bases.every(b => b === bases[0]);
 
         // 组内存在一个"本体"，其他成员名字都以它开头 → 本体 + 补丁/扩展，配套
-        const base = hit.find(h => hit.every(o => o === h || o.name.startsWith(h.name)));
+        // 同名（不同版本）不算配套，否则真正的重复冲突会被吞掉
+        const base = hit.find(h => hit.every(o => o === h || (o.name !== h.name && o.name.startsWith(h.name))));
 
         return {
             label: s.label,
@@ -289,8 +290,12 @@ function main() {
     const enabledIds = loadEnabledIds();
 
     const mods = [];
-    fs.readdirSync(WORKSHOP).forEach(id => {
-        if (!fs.statSync(path.join(WORKSHOP, id)).isDirectory()) return;
+    let dirIds = [];
+    try { dirIds = fs.readdirSync(WORKSHOP); }
+    catch (e) { console.log('读不了目录 ' + WORKSHOP + '：' + e.message); return; }
+    dirIds.forEach(id => {
+        try { if (!fs.statSync(path.join(WORKSHOP, id)).isDirectory()) return; }
+        catch (e) { return; }   // 坏链接 / 无权限的目录跳过
         const a = analyze(id);
         if (!a) return;
         const c = classify(a);
@@ -500,7 +505,10 @@ function resortActive(list) {
     const isZh = m => /汉化|简体|chinese|cn_zh/i.test(nm(m));
     const isAddon = m => /(补丁|patch|扩展|拓展|expansion|extra|add-?on|兼容|compat)/i.test(nm(m));
 
-    const head = list.filter(isLuaFrame).concat(list.filter(isClientSide));
+    const head = [];
+    list.forEach(m => {
+        if ((isLuaFrame(m) || isClientSide(m)) && head.indexOf(m) < 0) head.push(m);   // 去重：避免同一个 mod 被启用两次
+    });
     const tail = list.filter(m => isOldFrame(m) || isDead(m));
     const zh = list.filter(m => isZh(m) && tail.indexOf(m) < 0);
     let rest = list.filter(m => head.indexOf(m) < 0 && tail.indexOf(m) < 0 && zh.indexOf(m) < 0);
@@ -554,8 +562,10 @@ function resortActive(list) {
     }
     if (depMoved) notes.push('依赖顺序修正 ' + depMoved + ' 处（前置排到使用方之前）');
 
-    rest = all.slice(0, restLen);
-    const zhOut = all.slice(restLen);
+    // 按「是不是汉化」重新划分，不能按下标切：拓扑调整会打乱位置
+    const zhIds = new Set(zh.map(m => m.id));
+    rest = all.filter(m => !zhIds.has(m.id));
+    const zhOut = all.filter(m => zhIds.has(m.id));
 
     if (zhOut.length) notes.push('汉化覆盖沉底 ' + zhOut.length + ' 个（最后加载才能盖住原文）');
     if (tail.length) notes.push('旧框架/已废弃沉底 ' + tail.length + ' 个（建议停用）');

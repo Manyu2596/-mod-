@@ -10,9 +10,11 @@
 const fs = require('fs');
 const path = require('path');
 const sort = require('./sort.js');
-const { analyze, classify, WORKSHOP, INSTALLED } = sort;
+const { analyze, classify, WORKSHOP } = sort;
 
-const CONFIG = path.join(sort.GAME, 'config_player.xml');
+// 路径现取（sort.js 里 GAME/INSTALLED 是加载时的快照，换环境会失效）
+const P = (typeof sort.getPaths === 'function') ? sort.getPaths() : { GAME: sort.GAME, INSTALLED: sort.INSTALLED };
+const CONFIG = path.join(P.GAME, 'config_player.xml');
 const DISABLE_TIER = 99; // sort.js 里给"旧框架/已废弃"打的档位
 
 // 按当前环境重新拼出某个创意工坊 mod 的 filelist.xml 路径。
@@ -20,7 +22,7 @@ const DISABLE_TIER = 99; // sort.js 里给"旧框架/已废弃"打的档位
 // 游戏找不到文件就会表现为"mod 没启用"。所以这里一律重新生成，不沿用旧值。
 // 游戏配置里分隔符是正斜杠，因此统一转换。
 function rebuildPath(id) {
-    return path.join(INSTALLED, String(id), 'filelist.xml').replace(/\\/g, '/');
+    return path.join(P.INSTALLED, String(id), 'filelist.xml').replace(/\\/g, '/');
 }
 
 function main() {
@@ -35,12 +37,14 @@ function main() {
     const [, open, inner, close] = m;
 
     // 解析每个 <package> 及其前面的注释
-    const pkgRe = /<!--([\s\S]*?)-->\s*<package\s+path="([^"]*)"\s*\/>/g;
+    const pkgRe = /<package\s+path="([^"]*)"\s*\/>/g;
     const pkgs = [];
     let p;
     while ((p = pkgRe.exec(inner)) !== null) {
-        const comment = p[1].trim();
-        const pkgPath = p[2];
+        // 注释是可选的：没有注释也要解析出来，否则这个 mod 会被静默丢掉
+        const cm = /<!--([\s\S]*?)-->\s*$/.exec(inner.slice(0, p.index));
+        const comment = cm ? cm[1].trim() : '';
+        const pkgPath = p[1];
         const idm = /Installed[/\\](\d+)[/\\]/i.exec(pkgPath);
         const id = idm ? idm[1] : null;
         // 创意工坊 mod：按当前 INSTALLED 目录重建路径
@@ -66,7 +70,8 @@ function main() {
                 name = a.name;
                 const c = classify(a);
                 const patchBonus = /补丁|patch/i.test(a.name) ? -0.5 : 0;
-                tier = c.tier + patchBonus;
+                // 旧框架 / 废弃（tier 99）不参与减档，否则会因为名字带「补丁」被重新启用
+                tier = c.tier >= DISABLE_TIER ? c.tier : c.tier + patchBonus;
                 cat = c.cat;
             }
         }
@@ -90,12 +95,16 @@ function main() {
     const disabled = items.filter(x => x.tier >= DISABLE_TIER);
     const active = items.filter(x => x.tier < DISABLE_TIER);
 
+    // 注释里不能出现 -- ；同时转义 &<>
+    const escCmt = s => String(s == null ? '' : s)
+        .replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+        .replace(/-{2,}/g, '-');
     const indent = '      ';
     const lines = active.map(x =>
-        `${indent}<!--${x.name}-->\n${indent}<package\n${indent}  path="${x.path}" />`
+        `${indent}<!--${escCmt(x.name)}-->\n${indent}<package\n${indent}  path="${x.path}" />`
     );
     disabled.forEach(x => {
-        lines.push(`${indent}<!-- DISABLED by sorter: ${x.name} (${x.cat}) -->`);
+        lines.push(`${indent}<!-- DISABLED by sorter: ${escCmt(x.name)} (${escCmt(x.cat)}) -->`);
         lines.push(`${indent}<!--<package path="${x.path}" />-->`);
     });
 
@@ -104,7 +113,10 @@ function main() {
 
     // 备份
     const bak = CONFIG + '.bak';
-    if (!fs.existsSync(bak)) fs.copyFileSync(CONFIG, bak);
+    try {
+        if (fs.existsSync(bak)) fs.copyFileSync(bak, CONFIG + '.bak1');
+        fs.copyFileSync(CONFIG, bak);          // 每次都留一份当前配置，不只第一次
+    } catch (e) { console.error('备份失败，已中止：' + e.message); process.exit(1); }
 
     if (process.argv.includes('--dry')) {
         console.log('=== DRY RUN（未写入）===');

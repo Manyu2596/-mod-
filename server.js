@@ -7,7 +7,19 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { exec, execSync } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
+const MAX_BODY = 256 * 1024 * 1024;   // 请求体上限 256MB（zip 走 base64 会膨胀约 1.4 倍）
+
+// 本地工具：任何漏网的异常都不该让服务直接退出，记到 server.err 里继续活着
+function logFatal(kind, e) {
+    try {
+        fs.appendFileSync(path.join(__dirname, 'server.err'),
+            new Date().toISOString() + ' ' + kind + ': ' + ((e && e.stack) || e) + '\n', 'utf8');
+    } catch (_) { }
+    try { console.error('[' + kind + ']', e && e.message); } catch (_) { }
+}
+process.on('uncaughtException', e => logFatal('uncaught', e));
+process.on('unhandledRejection', e => logFatal('rejection', e));
 const https = require('https');
 const os = require('os');
 
@@ -474,6 +486,7 @@ function pkgPathFor(id, installedDir) {
         out = xml.replace(/[\t ]*<regularpackages>[\s\S]*?<\/regularpackages>\r?\n?/, '');
         const block = '  <contentpackages>\n    <regularpackages>' + inner + '</regularpackages>\n  </contentpackages>\n';
         const i = out.lastIndexOf('</config>');
+        if (i < 0) throw new Error('配置里找不到 </config>，已放弃写入（避免把 config_player.xml 写坏）。请在游戏里启动一次让它重新生成，或删掉该文件后重开游戏');
         out = out.slice(0, i) + block + '</config>' + out.slice(i + '</config>'.length);
     }
     fs.writeFileSync(configPath(), out, 'utf8');
@@ -660,7 +673,9 @@ function findDuplicateIdentifiers(mods) {
     const vanilla = vanillaIdentifiers();
     const map = {};
     mods.forEach(m => {
-        const dir = path.join(W, m.id);
+        // 本地 mod（LocalMods）也要参与，不能只查工坊目录
+        let dir = modDirOf(m);
+        if (!fs.existsSync(path.join(dir, 'filelist.xml'))) dir = path.join(W, String(m.id));
         const fl = path.join(dir, 'filelist.xml');
         if (!fs.existsSync(fl)) return;
         let xml;
@@ -788,6 +803,10 @@ function copyDir(src, dest) {
 
 const server = http.createServer((req, res) => {
     const url = req.url.split('?')[0];
+    const clen = parseInt(req.headers['content-length'] || '0', 10);
+    if (clen > MAX_BODY) {
+        return send(res, 413, JSON.stringify({ ok: false, error: '请求体过大（上限 ' + Math.round(MAX_BODY / 1048576) + ' MB），已拒绝' }));
+    }
 
     if (url === '/' || url === '/ui.html') {
         if (!fs.existsSync(UI)) return send(res, 404, 'ui.html 缺失', 'text/plain');
@@ -957,6 +976,10 @@ const server = http.createServer((req, res) => {
         try {
             const current = scanModVersions();
             const prev = loadVersions();
+            // 路径失效时 scanModVersions 会返回空，此时写基线会把所有 mod 记成「已移除」
+            if (prev && Object.keys(prev).length && Object.keys(current).length === 0) {
+                return send(res, 200, JSON.stringify({ ok: true, warn: '这次没扫描到任何 mod（路径可能失效），原有版本基线未改动', updated: [], added: [], removed: [], count: Object.keys(prev).length }));
+            }
             if (!prev) {
                 saveVersions(current);
                 return send(res, 200, JSON.stringify({ ok: true, first: true, count: Object.keys(current).length }));
@@ -1068,7 +1091,8 @@ const server = http.createServer((req, res) => {
                 if (!dir || !fs.existsSync(dir)) throw new Error('找不到存档目录');
                 const slot = listSaves(dir).find(x => x.name === b.name);
                 if (!slot) throw new Error('没找到这个存档：' + b.name);
-                const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+                const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) +
+                    '-' + String(Date.now() % 1000).padStart(3, '0');
                 const dest = path.join(BACKUP_ROOT, b.kind === 'multi' ? 'multi' : 'single', b.name, stamp);
                 fs.mkdirSync(dest, { recursive: true });
                 slot.files.forEach(f => fs.copyFileSync(path.join(dir, f), path.join(dest, f)));
@@ -1133,7 +1157,10 @@ const server = http.createServer((req, res) => {
                 if (b.target === 'single') dir = D.single;
                 else if (b.target === 'multi') dir = D.multi;
                 else fs.mkdirSync(BACKUP_ROOT, { recursive: true });
-                if (dir && fs.existsSync(dir)) exec('explorer "' + dir + '"', () => { });
+                if (dir && fs.existsSync(dir)) {
+                    try { spawn('explorer', [dir], { detached: true, stdio: 'ignore' }).unref(); }
+                    catch (e) { exec('explorer "' + dir.replace(/"/g, '') + '"', () => { }); }
+                }
                 send(res, 200, JSON.stringify({ ok: true }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
@@ -1174,7 +1201,7 @@ const server = http.createServer((req, res) => {
             })).sort((x, y) => y.count - x.count).slice(0, 30);
             send(res, 200, JSON.stringify({ ok: true, pairs: out, scanned: enabled.length }));
         } catch (e) {
-            send(res, 200, JSON.stringify({ ok: false, error: e.message }));
+            send(res, 500, JSON.stringify({ ok: false, error: e.message }));
         }
         return;
     }
@@ -1204,7 +1231,7 @@ const server = http.createServer((req, res) => {
             }
             send(res, 200, JSON.stringify({ ok: true, items }));
         } catch (e) {
-            send(res, 200, JSON.stringify({ ok: false, error: e.message }));
+            send(res, 500, JSON.stringify({ ok: false, error: e.message }));
         }
         return;
     }
@@ -1216,10 +1243,10 @@ const server = http.createServer((req, res) => {
             try {
                 const b = JSON.parse(raw);
                 const file = String((b && b.file) || '');
-                if (!/^config_[A-Za-z0-9\-_]+\.xml$/.test(file)) return send(res, 200, JSON.stringify({ ok: false, error: '备份名不合法' }));
+                if (!/^config_[A-Za-z0-9\-_]+\.xml$/.test(file)) return send(res, 400, JSON.stringify({ ok: false, error: '备份名不合法' }));
                 const hd = path.join(__dirname, 'confighistory');
                 const f = path.join(hd, file);
-                if (!fs.existsSync(f)) return send(res, 200, JSON.stringify({ ok: false, error: '找不到这份备份' }));
+                if (!fs.existsSync(f)) return send(res, 404, JSON.stringify({ ok: false, error: '找不到这份备份' }));
                 const cp = configPath();
                 try { fs.writeFileSync(cp + '.bak', fs.readFileSync(cp, 'utf8')); } catch (e) { }
                 const txt = fs.readFileSync(f, 'utf8');
@@ -1268,6 +1295,7 @@ const server = http.createServer((req, res) => {
     if (url === '/api/paths/rescan' && req.method === 'POST') {
         try {
             const P = refreshPaths();
+            VANILLA = null;                // 重新检测后原版标识符缓存作废
             send(res, 200, JSON.stringify({ ok: true, paths: P, manual: loadUserPaths() }));
         } catch (e) {
             send(res, 500, JSON.stringify({ ok: false, error: e.message }));
@@ -1293,6 +1321,7 @@ const server = http.createServer((req, res) => {
                     });
                 }
                 const P = refreshPaths();
+                VANILLA = null;            // 换了游戏目录，原版标识符缓存作废
                 send(res, 200, JSON.stringify({ ok: true, paths: P, manual: loadUserPaths() }));
             } catch (e) {
                 send(res, 500, JSON.stringify({ ok: false, error: e.message }));
@@ -1341,12 +1370,19 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 let cleaned = 0;
                 try {
                     const keep = new Set(ids);
-                    for (const e of fs.readdirSync(folder, { withFileTypes: true })) {
-                        if (!e.isDirectory()) continue;
-                        if (keep.has(e.name)) continue;
-                        if (!safeModId(e.name)) continue;
-                        rmDirSync(path.join(folder, e.name));
-                        cleaned++;
+                    // 导出目录不能落在游戏 / 创意工坊 / 已安装 / 本地 mod 目录里，否则下面的清理会删掉真正的 mod
+                    const PG = getPaths();
+                    const rf = path.resolve(folder).toLowerCase();
+                    const risky = [PG.GAME, PG.WORKSHOP, PG.INSTALLED, PG.LOCALMODS]
+                        .filter(Boolean).map(d => path.resolve(d).toLowerCase());
+                    if (!risky.some(d => rf === d || rf.startsWith(d + path.sep))) {
+                        for (const e of fs.readdirSync(folder, { withFileTypes: true })) {
+                            if (!e.isDirectory()) continue;
+                            if (keep.has(e.name)) continue;
+                            if (!safeModId(e.name)) continue;
+                            rmDirSync(path.join(folder, e.name));
+                            cleaned++;
+                        }
                     }
                 } catch (e) { /* 清理失败不影响导出 */ }
                 let count = 0; const skipped = [];
@@ -1389,13 +1425,18 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                         // 文件名带「几个 mod + 时间」，一眼看出这一包是哪次导出的
                         zipPath = path.join(outDir, 'BarotraumaMods-' + count + 'mods-' + tag + '.zip');
                         // 只留最新这一包，免得越攒越多
-                        try {
-                            for (const f of fs.readdirSync(outDir)) {
-                                if (/^BarotraumaMods-\d+mods-\d{8}-\d{4}\.zip$/i.test(f) || f.toLowerCase() === 'mods_pack.zip') {
-                                    try { fs.unlinkSync(path.join(outDir, f)); } catch (e) { }
+                        // 只清自己生成过的 zip；outDir 是用户目录时不扫不删，避免误删别人的文件
+                        const defExp = path.resolve(path.join(__dirname, 'exported_mods'));
+                        const canClean = path.resolve(outDir) === defExp || path.resolve(outDir) === path.resolve(__dirname);
+                        if (canClean) {
+                            try {
+                                for (const f of fs.readdirSync(outDir)) {
+                                    if (/^BarotraumaMods-\d+mods-\d{8}-\d{4}\.zip$/i.test(f) || f.toLowerCase() === 'mods_pack.zip') {
+                                        try { fs.unlinkSync(path.join(outDir, f)); } catch (e) { }
+                                    }
                                 }
-                            }
-                        } catch (e) { }
+                            } catch (e) { }
+                        }
                         try {
                             const cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path ' +
                                 Q_(path.join(folder, '*')) + ' -DestinationPath ' + Q_(zipPath) +
@@ -1440,23 +1481,24 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 // Windows：调用独立脚本打开文件夹并强制置前（后台进程直接开 explorer 会被挡在后面）
                 const Q = String.fromCharCode(34);
                 const minimizeAll = (typeof b.minimize === 'boolean') ? b.minimize : (loadShare().minimize === true);
-                let cmd;
-                if (process.platform === 'win32') {
-                    const ps1 = path.join(__dirname, 'openFolder.ps1');
                 // select：导出完要直接选中那个 zip，省得再找
                 const sel = (b.select && fs.existsSync(String(b.select))) ? String(b.select) : '';
-                    if (fs.existsSync(ps1)) {
-                        cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' + Q + ps1 + Q + ' -Folder ' + Q + folder + Q +
-                        (minimizeAll ? ' -Minimize 1' : '') + (sel ? (' -Select ' + Q + sel + Q) : '');
+                // 用参数数组启动（不用拼字符串），路径里的引号不会被当成命令的一部分
+                try {
+                    if (process.platform === 'win32') {
+                        const ps1 = path.join(__dirname, 'openFolder.ps1');
+                        if (fs.existsSync(ps1)) {
+                            const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, '-Folder', folder];
+                            if (minimizeAll) args.push('-Minimize', '1');
+                            if (sel) args.push('-Select', sel);
+                            spawn('powershell', args, { detached: true, stdio: 'ignore' }).unref();
+                        } else {
+                            spawn('explorer', [sel ? ('/select,' + sel) : folder], { detached: true, stdio: 'ignore' }).unref();
+                        }
                     } else {
-                        cmd = sel
-                        ? ('cmd /c explorer /select,' + Q + sel + Q)
-                        : ('cmd /c explorer ' + Q + folder + Q);
+                        spawn('xdg-open', [folder], { detached: true, stdio: 'ignore' }).unref();
                     }
-                } else {
-                    cmd = 'xdg-open ' + Q + folder + Q;
-                }
-                exec(cmd, () => {});
+                } catch (e) { /* 打开文件夹失败不影响导出结果 */ }
                 send(res, 200, JSON.stringify({ ok: true, folder }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
@@ -1484,7 +1526,25 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             const src = path.join(folder, id);
             if (!fs.existsSync(src)) { skipped.push(id); continue; }
             const dest = path.join(W, id);
-            rmDirSync(dest); copyDir(src, dest); imported++;
+            const stampT = Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+            const tmpD = path.join(W, id + '.tmp_' + stampT);
+            const oldD = path.join(W, id + '.old_' + stampT);
+            rmDirSync(tmpD);
+            try { copyDir(src, tmpD); }
+            catch (e) { rmDirSync(tmpD); throw new Error('复制失败（原来的 mod 没动）：' + e.message); }
+            let renamed = false;
+            if (fs.existsSync(dest)) {
+                try { fs.renameSync(dest, oldD); renamed = true; }
+                catch (e) { /* 被占用时退化为直接覆盖 */ }
+            }
+            try { fs.renameSync(tmpD, dest); }
+            catch (e) {
+                if (renamed) { try { fs.renameSync(oldD, dest); } catch (e2) { } }
+                rmDirSync(tmpD);
+                throw new Error('替换失败（已还原原来的 mod）：' + e.message);
+            }
+            if (renamed) rmDirSync(oldD);
+            imported++;
         }
         return { imported: imported, skipped: skipped, active: ids, items: items };
     }
@@ -1930,7 +1990,8 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     if (url === '/api/presets/open' && req.method === 'POST') {
         try {
             fs.mkdirSync(PRESET_DIR, { recursive: true });
-            exec('cmd /c explorer "' + PRESET_DIR + '"');
+            try { spawn('explorer', [PRESET_DIR], { detached: true, stdio: 'ignore' }).unref(); }
+    catch (e) { exec('cmd /c explorer "' + PRESET_DIR + '"'); }
             send(res, 200, JSON.stringify({ ok: true, dir: PRESET_DIR }));
         } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         return;
@@ -1964,7 +2025,8 @@ server.on('error', e => {
     }
 });
 server.listen(port, '127.0.0.1', () => {
-    fs.writeFileSync(path.join(__dirname, 'server.port'), String(port), 'utf8');
+    try { fs.writeFileSync(path.join(__dirname, 'server.port'), String(port), 'utf8'); }
+    catch (e) { console.error('写 server.port 失败：' + e.message); }
     // 首次运行记录一份版本基线，供「检查更新」对比
     if (!loadVersions()) {
         try { saveVersions(scanModVersions()); console.log('  已记录 mod 版本基线'); } catch (e) { /* 忽略 */ }

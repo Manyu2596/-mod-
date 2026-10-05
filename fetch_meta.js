@@ -56,9 +56,13 @@ async function main() {
             description: (d.description || '').replace(/^﻿/, ''),
         };
     }
-    fs.writeFileSync(OUT, JSON.stringify(map, null, 2), 'utf8');
-    console.log(`已写入 ${map.length || Object.keys(map).length} 个 mod 的 Steam 元数据 -> ${OUT}`);
+    // 合并而不是覆盖：接口只返回部分条目时，不能把其它 mod 已有元数据清掉
+    let prev = {};
+    try { prev = JSON.parse(fs.readFileSync(OUT, 'utf8')); } catch (e) { prev = {}; }
+    const merged = Object.assign({}, prev, map);
+    fs.writeFileSync(OUT, JSON.stringify(merged, null, 2), 'utf8');
+    console.log(`已写入 ${Object.keys(merged).length} 个 mod 的 Steam 元数据（本次新增/更新 ${Object.keys(map).length} 个）-> ${OUT}`);
     console.log('下次运行 sort.js 会优先采用其中含中文的官方标题。');
 }
 
-main().catch(e => { console.log('fetch_meta 出错（已忽略）：' + e.message); process.exit(0); });
+main().catch(e => { console.error('fetch_meta 出错：' + e.message); process.exit(1); });

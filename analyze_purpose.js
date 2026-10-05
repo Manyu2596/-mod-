@@ -122,8 +122,14 @@ function purposeOf(m, samples) {
 }
 
 function main() {
-    const ids = fs.readdirSync(WORKSHOP)
-        .filter(d => fs.statSync(path.join(WORKSHOP, d)).isDirectory());
+    let ids = [];
+    try {
+        ids = fs.readdirSync(WORKSHOP)
+            .filter(d => { try { return fs.statSync(path.join(WORKSHOP, d)).isDirectory(); } catch (e) { return false; } });
+    } catch (e) {
+        console.error('读不了工坊目录 ' + WORKSHOP + '：' + e.message);
+        process.exit(1);
+    }
     const out = {};
     ids.forEach(id => {
         const m = lib.analyze(id);

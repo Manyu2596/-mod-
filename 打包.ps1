@@ -1,31 +1,9 @@
 ﻿$root = $PSScriptRoot
 $dist = Join-Path $root 'dist\潜渊症Mod管理器'
 
-# 重打包前保留运行时用户数据（手动译文 / 翻译缓存 / 版本基线），打包完成后还原
-$userData = @('user_zh.json', 'translations.json', 'versions.json', 'share.json')
-$keep = @{}
-foreach ($f in $userData) {
-    $p = Join-Path $dist $f
-    if (Test-Path $p) { $keep[$f] = [System.IO.File]::ReadAllBytes($p) }
-}
-
-# 保留「mod 方案存档」（用户的 mod 组合），避免一次重打包就全没了
-$presetKeep = Join-Path $env:TEMP 'BaroPresetsBackup'
-if (Test-Path $presetKeep) { Remove-Item $presetKeep -Recurse -Force }
-if (Test-Path (Join-Path $dist 'presets')) {
-    Copy-Item (Join-Path $dist 'presets') $presetKeep -Recurse -Force
-}
-
-# 先停掉正在跑的实例，否则 node.exe 被占用删不掉
-Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -like ('*' + (Join-Path $dist 'server.js') + '*') } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 1
-
-if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
-New-Item -ItemType Directory -Path $dist -Force | Out-Null
-
-# Node 运行时：项目目录 node.exe → 环境变量 BARO_NODE → Program Files → 系统 PATH
+# ---------- 0. 先确认 node.exe 在哪儿 ----------
+# 必须「先找到再删 dist」：以前是先把 dist 删了才找 node.exe，找不到就 exit 1，
+# 结果 dist 已经空了、后面的数据还原也不会执行 → 用户数据全丢（存档备份/回滚历史/方案存档）
 $nodeSrc = Join-Path $root 'node.exe'
 if (!(Test-Path $nodeSrc) -and $env:BARO_NODE) { $nodeSrc = $env:BARO_NODE }
 if (!(Test-Path $nodeSrc)) { $nodeSrc = Join-Path $env:ProgramFiles 'nodejs\node.exe' }
@@ -35,8 +13,38 @@ if (!(Test-Path $nodeSrc)) {
 }
 if (!(Test-Path $nodeSrc)) {
     Write-Host 'node.exe not found: install Node.js, or put node.exe in this folder.'
+    Write-Host '（或者先设置环境变量 BARO_NODE 指向 node.exe，例：$env:BARO_NODE="D:\Node\node.exe"）'
+    Write-Host 'dist 未做任何改动，你的数据都在。'
     exit 1
 }
+
+# ---------- 1. 备份运行时用户数据 ----------
+$userData = @('user_zh.json', 'translations.json', 'versions.json', 'share.json', 'modsize.json')
+$keep = @{}
+foreach ($f in $userData) {
+    $p = Join-Path $dist $f
+    if (Test-Path $p) { $keep[$f] = [System.IO.File]::ReadAllBytes($p) }
+}
+# 用户目录：mod 方案存档 / 存档备份 / 配置回滚历史
+$keepRoot = Join-Path $env:TEMP 'BaroDistDataBackup'
+if (Test-Path $keepRoot) { Remove-Item $keepRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $keepRoot -Force | Out-Null
+$userDirs = @('presets', 'savebackups', 'confighistory')
+foreach ($d in $userDirs) {
+    $p = Join-Path $dist $d
+    if (Test-Path $p) { Copy-Item $p (Join-Path $keepRoot $d) -Recurse -Force; Write-Host ("backup dir: " + $d) }
+}
+
+# ---------- 2. 停服务、重建 dist ----------
+# 先停掉正在跑的实例，否则 node.exe 被占用删不掉
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like ('*' + (Join-Path $dist 'server.js') + '*') } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
+
+if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
+New-Item -ItemType Directory -Path $dist -Force | Out-Null
+
 Copy-Item $nodeSrc (Join-Path $dist 'node.exe') -Force
 
 foreach ($f in @('server.js', 'ui.html', 'sort.js', 'zh.json', 'fetch_meta.js', 'app.png', 'app.ico', 'openFolder.ps1', '潜渊症Mod管理器.vbs')) {
@@ -46,12 +54,14 @@ foreach ($f in @('server.js', 'ui.html', 'sort.js', 'zh.json', 'fetch_meta.js', 
 # 还原用户数据（分享给别人前可自行删除这几个文件）
 foreach ($f in $keep.Keys) {
     [System.IO.File]::WriteAllBytes((Join-Path $dist $f), $keep[$f])
+    Write-Host ("restored: " + $f)
 }
-# 还原方案存档
-if (Test-Path $presetKeep) {
-    Copy-Item $presetKeep (Join-Path $dist 'presets') -Recurse -Force
-    Remove-Item $presetKeep -Recurse -Force
+# 还原用户目录（方案存档 / 存档备份 / 配置回滚历史）
+Get-ChildItem $keepRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path $dist $_.Name) -Recurse -Force
+    Write-Host ("restored dir: " + $_.Name)
 }
+Remove-Item $keepRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 function W($name, $text) {
     [System.IO.File]::WriteAllText((Join-Path $dist $name), $text, (New-Object System.Text.UTF8Encoding($false)))
