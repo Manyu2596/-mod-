@@ -18,18 +18,20 @@ if (!(Test-Path $nodeSrc)) {
     exit 1
 }
 
-# ---------- 1. 备份运行时用户数据 ----------
+# ---------- 1. 用户数据不在这里 ----------
+# 存档备份 / mod 方案存档 / 配置回滚历史 / 译文 / 版本基线 都存在
+# %LOCALAPPDATA%\潜渊症Mod管理器数据（server.js 的 DATA_DIR），不在程序目录里，
+# 所以重打包、升级版本、重装都不会碰到它们。这里只保留一份「万一还有残留」的兜底备份。
 $userData = @('user_zh.json', 'translations.json', 'versions.json', 'share.json', 'modsize.json')
 $keep = @{}
 foreach ($f in $userData) {
     $p = Join-Path $dist $f
     if (Test-Path $p) { $keep[$f] = [System.IO.File]::ReadAllBytes($p) }
 }
-# 用户目录：mod 方案存档 / 存档备份 / 配置回滚历史
 $keepRoot = Join-Path $env:TEMP 'BaroDistDataBackup'
 if (Test-Path $keepRoot) { Remove-Item $keepRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $keepRoot -Force | Out-Null
-$userDirs = @('presets', 'savebackups', 'confighistory')
+$userDirs = @('presets', 'savebackups', 'confighistory', 'exported_mods', '导出的mod')
 foreach ($d in $userDirs) {
     $p = Join-Path $dist $d
     if (Test-Path $p) { Copy-Item $p (Join-Path $keepRoot $d) -Recurse -Force; Write-Host ("backup dir: " + $d) }

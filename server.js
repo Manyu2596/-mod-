@@ -29,10 +29,54 @@ const { analyze, classify, loadEnabledIds, detectSeries, GAME_VERSION,
 
 // 配置路径随探测结果变化，每次现取（支持运行时重新检测 / 手动改路径）
 function configPath() { return path.join(getPaths().GAME, 'config_player.xml'); }
+// ---------- 用户数据目录 ----------
+// 程序目录（dist / 安装目录）每次更新版本、重新打包都会被整个重建，
+// 所以「存档备份 / mod 方案存档 / 配置回滚历史 / 译文 / 版本基线」一律放在
+// %LOCALAPPDATA%\潜渊症Mod管理器数据（可用环境变量 BARO_DATA 改到别处），
+// 这样升级版本、重装、重打包都不会再碰到用户数据。
+const DATA_DIR = (function () {
+    const env = (process.env.BARO_DATA || '').trim();
+    const base = process.env.LOCALAPPDATA || process.env.APPDATA || os.tmpdir();
+    const dir = env || path.join(base, '潜渊症Mod管理器数据');
+    try { fs.mkdirSync(dir, { recursive: true }); return dir; }
+    catch (e) { return __dirname; }   // 建不了就退回程序目录，至少还能用
+})();
+
+// 老版本把数据放在程序目录里，第一次用新版本时搬过去（只搬不删，原处留着当备份）
+(function migrateUserData() {
+    if (DATA_DIR === __dirname) return;
+    const items = [
+        { name: 'versions.json', dir: false }, { name: 'translations.json', dir: false },
+        { name: 'user_zh.json', dir: false }, { name: 'share.json', dir: false },
+        { name: 'modsize.json', dir: false },
+        { name: 'presets', dir: true }, { name: 'savebackups', dir: true },
+        { name: 'confighistory', dir: true }, { name: 'exported_mods', dir: true },
+        { name: '导出的mod', dir: true },
+    ];
+    const cpDir = (src, dst) => {
+        fs.mkdirSync(dst, { recursive: true });
+        for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+            const a = path.join(src, e.name), b = path.join(dst, e.name);
+            if (e.isDirectory()) cpDir(a, b);
+            else { try { fs.copyFileSync(a, b); } catch (err) { } }
+        }
+    };
+    items.forEach(it => {
+        const src = path.join(__dirname, it.name);
+        const dst = path.join(DATA_DIR, it.name);
+        if (!fs.existsSync(src) || fs.existsSync(dst)) return;
+        try {
+            if (it.dir) cpDir(src, dst);
+            else fs.copyFileSync(src, dst);
+            console.log('用户数据已迁移：' + src + ' -> ' + dst);
+        } catch (e) { console.log('迁移失败（忽略）：' + it.name + ' — ' + e.message); }
+    });
+})();
+
 const UI = path.join(__dirname, 'ui.html');
-const TRANS = path.join(__dirname, 'translations.json');
+const TRANS = path.join(DATA_DIR, 'translations.json');
 const ZH_PATH = path.join(__dirname, 'zh.json');
-const USER_ZH = path.join(__dirname, 'user_zh.json');
+const USER_ZH = path.join(DATA_DIR, 'user_zh.json');
 const OLLAMA = 'http://127.0.0.1:11434';
 const MODEL = 'qwen25-14b-8k';
 const PORT_START = 9182;
@@ -243,7 +287,7 @@ function sortByPinyin(arr) {
     return arr;
 }
 // ---------- mod 体积缓存（首次扫描后落盘，之后按 id+版本 复用）----------
-const SIZE_CACHE = path.join(__dirname, 'modsize.json');
+const SIZE_CACHE = path.join(DATA_DIR, 'modsize.json');
 let __sizeCache = null, __sizeDirty = false;
 function loadSizeCache() {
     if (__sizeCache) return __sizeCache;
@@ -415,7 +459,7 @@ function save(list, allowEmpty) {
 
     // 历史快照：保留最近 12 份，供面板「配置回滚」使用
     try {
-        const hd = path.join(__dirname, 'confighistory');
+        const hd = path.join(DATA_DIR, 'confighistory');
         fs.mkdirSync(hd, { recursive: true });
         const d = new Date();
         const p2 = n => String(n).padStart(2, '0');
@@ -549,7 +593,7 @@ function fillDeps(mods) {
 }
 
 // ---------- mod 更新检测（离线：对比本机会话的版本快照）----------
-const VERSIONS = path.join(__dirname, 'versions.json');
+const VERSIONS = path.join(DATA_DIR, 'versions.json');
 
 function loadVersions() {
     try { return JSON.parse(fs.readFileSync(VERSIONS, 'utf8')); } catch (e) { return null; }
@@ -732,7 +776,7 @@ function openAppWindow(u) {
 function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
 
 // ---------- 共享文件夹（导出/导入 mod 目录）----------
-const SHARE_FILE = path.join(__dirname, 'share.json');
+const SHARE_FILE = path.join(DATA_DIR, 'share.json');
 function loadShare() { try { return JSON.parse(fs.readFileSync(SHARE_FILE, 'utf8')); } catch (e) { return {}; } }
 function saveShare(o) { fs.writeFileSync(SHARE_FILE, JSON.stringify(o, null, 2), 'utf8'); }
 function __escShare(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -742,8 +786,8 @@ function __isWs(id) { return /^[0-9]{5,}$/.test(String(id == null ? '' : id).tri
 function __normName(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^0-9a-z\u4e00-\u9fa5]/g, ''); }
 // 默认就放在软件自己的文件夹里
 function defaultShareFolder() {
-    const nw = path.join(__dirname, 'exported_mods');
-    const old = path.join(__dirname, '导出的mod');
+    const nw = path.join(DATA_DIR, 'exported_mods');
+    const old = path.join(DATA_DIR, '导出的mod');
     try { if (!fs.existsSync(nw) && fs.existsSync(old)) fs.renameSync(old, nw); } catch (e) { }
     return nw;
 }
@@ -751,7 +795,7 @@ function defaultShareFolder() {
 function resolveShareFolder(f) { return (f && String(f).trim()) || loadShare().folder || defaultShareFolder(); }
 
 // ---------- mod 方案存档：一套启用列表存一个文件，换存档时来回切换 ----------
-const PRESET_DIR = path.join(__dirname, 'presets');
+const PRESET_DIR = path.join(DATA_DIR, 'presets');
 function __presetFile(name) {
     const n = String(name == null ? '' : name).replace(/[\\/:*?"<>|]/g, '_').replace(/^\s+|\s+$/g, '').replace(/^\.+$/, '_');
     if (!n) return '';
@@ -1011,7 +1055,7 @@ const server = http.createServer((req, res) => {
     // ---------- 存档管理 ----------
     // 单人存档在游戏存档根目录（*.save），多人存档在 Multiplayer 子目录里；
     // 一个存档槽 = <名字>.save + 可选的 <名字>_CharacterData.xml
-    const BACKUP_ROOT = path.join(__dirname, 'savebackups');
+    const BACKUP_ROOT = path.join(DATA_DIR, 'savebackups');
 
     function saveDirs() {
         const inst = getPaths().INSTALLED;
@@ -1075,7 +1119,7 @@ const server = http.createServer((req, res) => {
             send(res, 200, JSON.stringify({
                 ok: true, dirSingle: D.single, dirMulti: D.multi,
                 single: listSaves(D.single), multi: listSaves(D.multi),
-                backups: walkBackups(), backupRoot: BACKUP_ROOT,
+                backups: walkBackups(), backupRoot: BACKUP_ROOT, dataDir: DATA_DIR,
             }));
         } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         return;
@@ -1209,7 +1253,7 @@ const server = http.createServer((req, res) => {
     // 配置历史（每次保存到游戏前自动留一份）
     if (url === '/api/config/history') {
         try {
-            const hd = path.join(__dirname, 'confighistory');
+            const hd = path.join(DATA_DIR, 'confighistory');
             const items = [];
             if (fs.existsSync(hd)) {
                 fs.readdirSync(hd).filter(f => /^config_.*\.xml$/.test(f)).sort().reverse().forEach(f => {
@@ -1244,7 +1288,7 @@ const server = http.createServer((req, res) => {
                 const b = JSON.parse(raw);
                 const file = String((b && b.file) || '');
                 if (!/^config_[A-Za-z0-9\-_]+\.xml$/.test(file)) return send(res, 400, JSON.stringify({ ok: false, error: '备份名不合法' }));
-                const hd = path.join(__dirname, 'confighistory');
+                const hd = path.join(DATA_DIR, 'confighistory');
                 const f = path.join(hd, file);
                 if (!fs.existsSync(f)) return send(res, 404, JSON.stringify({ ok: false, error: '找不到这份备份' }));
                 const cp = configPath();
@@ -1426,7 +1470,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                         zipPath = path.join(outDir, 'BarotraumaMods-' + count + 'mods-' + tag + '.zip');
                         // 只留最新这一包，免得越攒越多
                         // 只清自己生成过的 zip；outDir 是用户目录时不扫不删，避免误删别人的文件
-                        const defExp = path.resolve(path.join(__dirname, 'exported_mods'));
+                        const defExp = path.resolve(path.join(DATA_DIR, 'exported_mods'));
                         const canClean = path.resolve(outDir) === defExp || path.resolve(outDir) === path.resolve(__dirname);
                         if (canClean) {
                             try {
