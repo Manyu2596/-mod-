@@ -160,7 +160,7 @@ li.over{border-color:#6366f1}
   </div>
   <div class="col">
     <h2>② 未启用<span id="ci"></span><span class="btns"><button id="enableAll" class="colbtn en" title="把右栏全部 mod 启用（插入左栏末尾）并写入游戏配置">一键启用</button></span></h2>
-    <div class="hint">不参与加载，启用后会按规则插入左栏</div>
+    <div class="hint">不参与加载 · 按名称首字母拼音 A→Z 排列（左侧字母即首字母），启用后会自动插入左栏合适位置</div>
     <ul id="idleList"></ul>
   </div>
 </div>
@@ -220,7 +220,7 @@ function makeItem(m, i, isActive){
     const zhHtml = m.zh ? '<span class="cn">' + esc(m.zh) + '</span> ' : '';
     li.innerHTML =
         '<span class="grip">≡</span>' +
-        '<span class="idx">' + (i + 1) + '</span>' +
+        '<span class="idx"' + (isActive ? '' : ' title="拼音首字母"') + '>' + (isActive ? (i + 1) : (m.py || '')) + '</span>' +
         '<div class="info"><div class="nm">' + zhHtml + esc(m.name) +
         (danger ? ' <span class="tagd">旧框架·建议停用</span>' : '') +
         (miss.length ? ' <span class="tagw" title="' + esc(miss.map(x => x.why).join('；')) + '">缺前置：' + esc(miss.map(x => x.name).join('、')) + '</span>' : '') +

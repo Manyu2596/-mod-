@@ -197,6 +197,39 @@ function readPackages() {
     return out;
 }
 
+// ---------- 拼音首字母（未启用列表按 A→Z 排序用）----------
+// 不依赖第三方库：用 zh 排序规则，配合每个拼音首字母的代表字定位所属字母段
+const PY_BOUND = [
+    ['A', '阿'], ['B', '八'], ['C', '擦'], ['D', '搭'], ['E', '蛾'], ['F', '发'], ['G', '嘎'],
+    ['H', '哈'], ['J', '击'], ['K', '咖'], ['L', '垃'], ['M', '妈'], ['N', '拿'], ['O', '哦'],
+    ['P', '趴'], ['Q', '七'], ['R', '然'], ['S', '撒'], ['T', '他'], ['W', '挖'], ['X', '西'],
+    ['Y', '丫'], ['Z', '匝'],
+];
+const PY_CACHE = {};
+function pyName(m) { return String((m && (m.zh || m.name)) || ''); }
+function pyLetterOf(m) {
+    const s = pyName(m).replace(/^[^\u4e00-\u9fa5A-Za-z0-9]+/, '');
+    if (!s) return '#';
+    const c = s[0];
+    if (/[a-zA-Z]/.test(c)) return c.toUpperCase();
+    if (/[0-9]/.test(c)) return '#';
+    if (!/[\u4e00-\u9fa5]/.test(c)) return '#';
+    if (PY_CACHE[c]) return PY_CACHE[c];
+    let letter = '#';
+    for (const b of PY_BOUND) {
+        if (c.localeCompare(b[1], 'zh') >= 0) letter = b[0]; else break;
+    }
+    PY_CACHE[c] = letter;
+    return letter;
+}
+function sortByPinyin(arr) {
+    arr.sort((a, b) => {
+        const la = pyLetterOf(a), lb = pyLetterOf(b);
+        if (la !== lb) return la < lb ? -1 : 1;
+        return pyName(a).localeCompare(pyName(b), 'zh', { numeric: true, sensitivity: 'base' });
+    });
+    return arr;
+}
 // ---------- 扫描所有 mod ----------
 function buildData() {
     const enabledIds = loadEnabledIds();
@@ -252,7 +285,8 @@ function buildData() {
         .filter(Boolean)
         .map(m => Object.assign(m, { cat: m.cat }));
     const idle = mods.filter(m => !enabledIds.has(m.id));
-    idle.sort((a, b) => a.tier - b.tier || a.name.localeCompare(b.name, 'zh'));
+    sortByPinyin(idle);                       // 未启用：按名称首字母拼音 A→Z，方便按字母翻找
+    idle.forEach(m => { m.py = pyLetterOf(m); });
 
     return { active, idle, trans: loadTrans() };
 }
@@ -715,9 +749,10 @@ const server = http.createServer((req, res) => {
                 const sortedEnabled = lib.resortActive(enabledMods);
                 const notes = sortedEnabled.notes || [];
 
-                const disabledIds = list.filter(x => !x.enabled).map(x => x.id);
+                const disabledMods = list.filter(x => !x.enabled).map(x => byId[x.id]).filter(Boolean);
+                sortByPinyin(disabledMods);
                 const out = sortedEnabled.map(m => ({ id: m.id, enabled: true }))
-                    .concat(disabledIds.map(id => ({ id, enabled: false })));
+                    .concat(disabledMods.map(m => ({ id: m.id, enabled: false })));
                 send(res, 200, JSON.stringify({ ok: true, list: out, notes: notes }));
             } catch (e) {
                 send(res, 500, JSON.stringify({ ok: false, error: e.message }));
