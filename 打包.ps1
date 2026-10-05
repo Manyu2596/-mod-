@@ -11,6 +11,23 @@ if (!(Test-Path $nodeSrc)) {
     $cmd = Get-Command node -ErrorAction SilentlyContinue
     if ($cmd) { $nodeSrc = $cmd.Source }
 }
+# 自动扫常见安装位置：nvm / 官方安装器 / 绿色解压版（很多人装在 D:\Node 之类，PATH 里没有）
+if (!(Test-Path $nodeSrc)) {
+    $cands = @()
+    $cands += Join-Path $env:LOCALAPPDATA 'Programs\nodejs\node.exe'
+    foreach ($d in (Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Root)) {
+        foreach ($sub in @('Node\node.exe', 'nodejs\node.exe', 'node\node.exe', 'Program Files\nodejs\node.exe')) {
+            $cands += Join-Path $d $sub
+        }
+    }
+    try {
+        $nvm = Resolve-Path (Join-Path $env:APPDATA 'nvm\*\node.exe') -ErrorAction SilentlyContinue
+        if ($nvm) { $cands += $nvm.Path }
+    } catch { }
+    foreach ($p in $cands) {
+        if ($p -and (Test-Path $p)) { $nodeSrc = $p; Write-Host ("found node: " + $p); break }
+    }
+}
 if (!(Test-Path $nodeSrc)) {
     Write-Host 'node.exe not found: install Node.js, or put node.exe in this folder.'
     Write-Host '（或者先设置环境变量 BARO_NODE 指向 node.exe，例：$env:BARO_NODE="D:\Node\node.exe"）'
