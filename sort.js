@@ -9,6 +9,25 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 // ---------- 自动探测本机路径（换台电脑也能直接用，无需改代码）----------
+// 注册表里拿到的路径经常是 d:/steam 这种（小写盘符 + 正斜杠）。
+// 不统一的话：界面上一会儿小写一会儿大写，手动填的 D:\\Steam 和自动探测的 d:/steam
+// 明明是同一个目录却比对不上。这里一律归一成 D:\\Steam 形式。
+function normDir(p) {
+    if (!p) return '';
+    let s = String(p).trim().replace(/\//g, '\\');
+    s = s.replace(/^([a-zA-Z]):\\*/, function (m, d) { return d.toUpperCase() + ':\\'; });
+    s = s.replace(/\\{2,}/g, '\\').replace(/\\+$/, '');
+    // 目录真实存在的话顺带取磁盘上的真实大小写：注册表只给盘符不给大小写（d:/steam），
+    // 显示出来像是另一个地方
+    try {
+        if (s.length > 3 && fs.existsSync(s)) {
+            const real = fs.realpathSync.native(s);
+            if (real && real.length) s = real;
+        }
+    } catch (e) { /* 取不到就用原值 */ }
+    return s;
+}
+
 function readSteamPath() {
     const outs = [];
     const tries = [
@@ -18,9 +37,9 @@ function readSteamPath() {
     ];
     for (const [key, val] of tries) {
         try {
-            const out = execSync(`reg query "${key}" /v ${val}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+            const out = execSync(`reg query "${key}" /v ${val}`, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 5000 }).toString();
             const m = /REG_(?:SZ|EXPAND_SZ)\s+(.+)/i.exec(out);
-            if (m) outs.push(m[1].trim());
+            if (m) outs.push(normDir(m[1].trim()));
         } catch (e) { /* 该注册表项不存在，继续试下一个 */ }
     }
     return outs;
@@ -35,24 +54,35 @@ function listSteamLibraries(steamPath) {
             const txt = fs.readFileSync(vdf, 'utf8');
             const re = /"path"\s+"([^"]+)"/g;
             let m;
-            while ((m = re.exec(txt)) !== null) libs.push(m[1].replace(/\\\\/g, '\\'));
+            while ((m = re.exec(txt)) !== null) libs.push(normDir(m[1]));
         }
     } catch (e) { /* 忽略解析失败 */ }
     return libs;
 }
 
+// 判定某个目录确实是潜渊症：以前只认 config_player.xml，但那个文件要等第一次
+// 进过游戏才生成 —— 「刚装好、还没开过游戏」的用户会被检测不到，掉回 D:\\Steam 兜底路径，
+// 明明 Steam 装在别的盘也照样读不到 mod。这里放宽到「目录在 + 有游戏本体文件」。
+function looksLikeGame(dir) {
+    if (!dir || !fs.existsSync(dir)) return false;
+    const marks = ['Barotrauma.exe', 'filelist.xml', 'config_player.xml', 'Submarines', 'LocalMods'];
+    for (const m of marks) { if (fs.existsSync(path.join(dir, m))) return true; }
+    return false;
+}
+
 function detectGame() {
     for (const sp of readSteamPath()) {
         for (const lib of listSteamLibraries(sp)) {
-            const game = path.join(lib, 'steamapps', 'common', 'Barotrauma');
-            if (fs.existsSync(path.join(game, 'config_player.xml'))) {
+            const game = normDir(path.join(lib, 'steamapps', 'common', 'Barotrauma'));
+            if (looksLikeGame(game)) {
                 return {
                     game,
-                    workshop: path.join(lib, 'steamapps', 'workshop', 'content', '602960'),
+                    workshop: normDir(path.join(lib, 'steamapps', 'workshop', 'content', '602960')),
                 };
             }
         }
     }
+    // 上面的多库都没命中；再兜一次：游戏装在主库的常见位置，但工作坊内容在别的库的情况
     return null;
 }
 
@@ -79,11 +109,12 @@ function loadUserPaths() {
 
 function saveUserPaths(o) {
     const cur = loadUserPaths();
+    const mk = (v, curV) => v === undefined ? curV : (String(v).trim() ? normDir(v) : '');
     const next = {
-        game: o.game !== undefined ? o.game : cur.game,
-        workshop: o.workshop !== undefined ? o.workshop : cur.workshop,
-        installed: o.installed !== undefined ? o.installed : cur.installed,
-        localmods: o.localmods !== undefined ? o.localmods : cur.localmods,
+        game: mk(o.game, cur.game),
+        workshop: mk(o.workshop, cur.workshop),
+        installed: mk(o.installed, cur.installed),
+        localmods: mk(o.localmods, cur.localmods),
     };
     fs.writeFileSync(PATHS_FILE, JSON.stringify(next, null, 2), 'utf8');
     return next;
@@ -103,7 +134,7 @@ function computePaths() {
 }
 
 let GAME, WORKSHOP, INSTALLED, LOCALMODS;
-function applyPaths(p) { GAME = p.game; WORKSHOP = p.workshop; INSTALLED = p.installed; LOCALMODS = p.localmods || ''; }
+function applyPaths(p) { GAME = normDir(p.game); WORKSHOP = normDir(p.workshop); INSTALLED = normDir(p.installed); LOCALMODS = normDir(p.localmods || ''); }
 applyPaths(computePaths());
 
 // 运行时可重新探测（比如刚装好游戏 / 改了 Steam 库位置）

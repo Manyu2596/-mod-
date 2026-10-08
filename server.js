@@ -684,10 +684,56 @@ function send(res, code, body, type) {
 let LAST_SUB_HTML = '';
 let LAST_CHECK_HTML = '';
 
+// ---------- 拉起 Steam（订阅 / 启动游戏都走这一条通道）----------
+// steam:// 协议关联有可能失效（点了没反应）；直接用 Steam.exe 打开 URL 更可靠
+let STEAM_EXE_CACHE = '';
+function steamExePath() {
+    if (STEAM_EXE_CACHE) return STEAM_EXE_CACHE;
+    const keys = ['HKCU\\Software\\Classes\\steam\\shell\\open\\command', 'HKLM\\Software\\Classes\\steam\\shell\\open\\command'];
+    for (const k of keys) {
+        try {
+            const out = execSync('reg query "' + k + '" /ve', { windowsHide: true, timeout: 4000 }).toString();
+            const m = out.match(/"([^"]+[\\/]steam\.exe)"/i);
+            if (m && fs.existsSync(m[1])) { STEAM_EXE_CACHE = m[1]; return STEAM_EXE_CACHE; }
+        } catch (e) { /* 继续试下一个 key */ }
+    }
+    STEAM_EXE_CACHE = '';
+    return '';
+}
+// Steam 客户端没运行时，steam:// 链接点了常常毫无反应，看着像工具坏了 —— 先查出来好给提示
+function steamRunning() {
+    if (process.platform !== 'win32') return true;
+    try {
+        const out = execSync('tasklist /FI "IMAGENAME eq steam.exe" /NH', { windowsHide: true, timeout: 5000 }).toString();
+        return /steam\.exe/i.test(out);
+    } catch (e) { return true; }   // 查不到就当作在运行，不影响正常流程
+}
+function openSteamUrl(u) {
+    const exe = steamExePath();
+    try {
+        if (exe) exec('cmd /c start "" "' + exe + '" "' + u + '"', { windowsHide: true }, () => { });
+        else exec('cmd /c start "" "' + u + '"', { windowsHide: true }, () => { });
+    } catch (e) { /* 忽略 */ }
+    return !!exe;
+}
+
+// 路径接口的返回格式（和 /api/data 里那套保持完全一致）
+function pathsOut(P) {
+    return {
+        game: P.GAME, workshop: P.WORKSHOP, installed: P.INSTALLED, localmods: P.LOCALMODS,
+        gameExists: fs.existsSync(P.GAME),
+        workshopExists: fs.existsSync(P.WORKSHOP),
+        installedExists: fs.existsSync(P.INSTALLED),
+        localmodsExists: !!(P.LOCALMODS && fs.existsSync(P.LOCALMODS)),
+    };
+}
+
 // 通过 Steam 启动游戏（本地服务，仅在本机生效）
 function launchGame() {
+    // 以前这里单独走 steam:// 协议，协议关联一失效就静默失败，界面只说「未能自动启动游戏」；
+    // 现在和订阅走同一条通道（优先 Steam.exe）
     try {
-        exec('cmd /c start "" "steam://rungameid/602960"');
+        openSteamUrl('steam://rungameid/602960');
         return true;
     } catch (e) {
         return false;
@@ -1486,6 +1532,17 @@ const server = http.createServer((req, res) => {
         catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         return;
     }
+    // 版本号比较：0.0.15 vs 0.0.14 要按数字段比，纯字符串比会得出错误的先后
+    function cmpVer(a, b) {
+        const seg = v => String(v || '').replace(/[^0-9.]/g, '').split('.').map(x => parseInt(x, 10) || 0);
+        const A = seg(a), B = seg(b);
+        for (let i = 0; i < Math.max(A.length, B.length); i++) {
+            const x = A[i] || 0, y = B[i] || 0;
+            if (x !== y) return x < y ? -1 : 1;
+        }
+        return 0;
+    }
+
     function joinCheck() {
         const P = getPaths();
         const W = P.WORKSHOP || '', I = P.INSTALLED || '', LM = P.LOCALMODS || '';
@@ -1495,6 +1552,7 @@ const server = http.createServer((req, res) => {
             catch (e) { return '-'; }
         };
         const problems = [];
+    const notes = [];
         (data.active || []).forEach(m => {
             const id = String(m.id);
             const inW = W ? fs.existsSync(path.join(W, id, 'filelist.xml')) : false;
@@ -1506,7 +1564,16 @@ const server = http.createServer((req, res) => {
             if (inW) {
                 const vw = readV(path.join(W, id, 'filelist.xml'));
                 const vi = readV(path.join(I, id, 'filelist.xml'));
-                if (vw !== vi) problems.push({ id, name: nm, kind: 'stale', why: '游戏加载目录是 v' + vi + '，工坊最新是 v' + vw + '，联机会被要求重新下载' });
+                if (vw && vi && vw !== vi) {
+                    const c = cmpVer(vi, vw);
+                    if (c < 0) {
+                        // Steam 已经把新版下到工坊目录，但还没复制进加载目录
+                        problems.push({ id, name: nm, kind: 'stale', why: '加载目录是 v' + vi + '，工坊已下载到 v' + vw + '：启动一次单人游戏让它复制过去，否则联机会被要求重新下载' });
+                    } else {
+                        // 加载目录比工坊目录还新：多半是作者回滚了版本，自己这边玩的是可以的
+                        notes.push({ id, name: nm, kind: 'rollback', why: '加载目录 v' + vi + ' 比工坊目录 v' + vw + ' 更新（作者多半回滚了版本）。不影响你自己玩，别人订阅到的是工坊那版' });
+                    }
+                }
             }
         });
         // ---- 主机视角：这些东西队友能不能拿到（掉线多半出在这儿）----
@@ -1547,7 +1614,7 @@ const server = http.createServer((req, res) => {
         });
 
         return {
-            total: act.length, problems,
+            total: act.length, problems, notes,
             host: {
                 count: act.length, totalMB, wsCount: wsIds.length, wsIds,
                 localMods, bigMods, hasLua, hasLuaClient, tips: hostTips,
@@ -1695,7 +1762,7 @@ const server = http.createServer((req, res) => {
         try {
             const P = refreshPaths();
             VANILLA = null;                // 重新检测后原版标识符缓存作废
-            send(res, 200, JSON.stringify({ ok: true, paths: P, manual: loadUserPaths() }));
+            send(res, 200, JSON.stringify({ ok: true, paths: pathsOut(P), manual: loadUserPaths() }));
         } catch (e) {
             send(res, 500, JSON.stringify({ ok: false, error: e.message }));
         }
@@ -1710,7 +1777,8 @@ const server = http.createServer((req, res) => {
             try {
                 const b = JSON.parse(raw) || {};
                 if (b.clear) {
-                    saveUserPaths({ game: '', workshop: '', installed: '' });
+                    // 以前漏了 localmods：「恢复自动」后本地 mod 目录还一直是手动值
+                    saveUserPaths({ game: '', workshop: '', installed: '', localmods: '' });
                 } else {
                     saveUserPaths({
                         game: typeof b.game === 'string' ? b.game.trim() : undefined,
@@ -1721,7 +1789,7 @@ const server = http.createServer((req, res) => {
                 }
                 const P = refreshPaths();
                 VANILLA = null;            // 换了游戏目录，原版标识符缓存作废
-                send(res, 200, JSON.stringify({ ok: true, paths: P, manual: loadUserPaths() }));
+                send(res, 200, JSON.stringify({ ok: true, paths: pathsOut(P), manual: loadUserPaths() }));
             } catch (e) {
                 send(res, 500, JSON.stringify({ ok: false, error: e.message }));
             }
@@ -2104,6 +2172,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     // 注意：每个工坊页都内嵌一段「This item has been removed...」的隐藏模板，不能拿它当失效依据
     function checkWsWebAlive(ids, cb) {
         const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept-Language': 'zh-CN,zh' };
+        const isNetErr = r => r.status === 'TIMEOUT' || String(r.status).indexOf('ERR') === 0;
         const one = (id, retry) => new Promise(resolve => {
             const rq = https.request('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id, {
                 method: 'GET', timeout: 15000, rejectUnauthorized: false, headers: UA
@@ -2137,13 +2206,33 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         });
         const out = [];
         let i = 0;
+        let netFails = 0, netDown = false;
+        // 网络不通（社区页根本连不上）时，逐个打几十次请求只会让用户干等一分钟才看到结果；
+        // 连续一批都拿不到响应就判定「网络不通」，直接收手
+        const SIZE = 4, GAP = 400;
+        const unusable = r => r.limited || isNetErr(r) || [429, 500, 502, 503, 504].indexOf(r.status) >= 0;
         const step = () => {
-            if (i >= ids.length) return Promise.resolve();
-            const batch = ids.slice(i, i + 2); i += 2;
-            return Promise.all(batch.map(id => one(id, 2)))
-                .then(rs => { rs.forEach(r => out.push(r)); return new Promise(s => setTimeout(s, 800)).then(step); });
+            if (i >= ids.length || netDown) return Promise.resolve();
+            const batch = ids.slice(i, i + SIZE); i += SIZE;
+            return Promise.all(batch.map(id => one(id, 1)))
+                .then(rs => {
+                    rs.forEach(r => out.push(r));
+                    if (rs.length && rs.every(isNetErr)) {
+                        netFails += rs.length;
+                        if (netFails >= 6) netDown = true;
+                    } else {
+                        netFails = 0;
+                    }
+                    // 查得够多以后，如果大半都不是有效结果，说明当前网络/限流就是查不动 —— 别让用户干等一分钟
+                    if (!netDown && out.length >= 12) {
+                        const badCnt = out.filter(unusable).length;
+                        if (badCnt / out.length >= 0.6) netDown = true;
+                    }
+                    if (netDown) return Promise.resolve();
+                    return new Promise(s2 => setTimeout(s2, GAP)).then(step);
+                });
         };
-        step().then(() => cb(out));
+        step().then(() => cb(out, netDown));
     }
 
     if (url === '/api/steam/websub-script' && req.method === 'POST') {
@@ -2172,16 +2261,21 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 }));
                 const ids = src.filter(m => __isWs(m.id)).map(m => m.id);
                 if (!ids.length) throw new Error('没有可校验的工坊 mod');
-                checkWsWebAlive(ids, arr => {
+                checkWsWebAlive(ids, (arr, netDown) => {
                     const bad = [];
                     const unknown = [];
                     arr.forEach(r => {
                         const m = src.find(x => x.id === r.id) || {};
-                        const limited = r.status === 429 || r.status === 'TIMEOUT' || String(r.status).indexOf('ERR') === 0;
+                        // 429/5xx/超时/连不上：都只是「这次没查到」，不代表 mod 失效。
+                        // 以前混在 bad 里报，会让人以为作者把 mod 删了，其实只是 Steam 抽风或网络不通。
+                        const limited = r.limited || isNetErr(r) || [429, 500, 502, 503, 504].indexOf(r.status) >= 0;
                         if (limited) { unknown.push({ id: r.id, name: m.name || '', status: r.status }); return; }
                         if (!(r.status === 200 && !r.err)) bad.push({ id: r.id, name: m.name || '', status: r.status, title: r.title || '' });
                     });
-                    send(res, 200, JSON.stringify({ ok: true, total: ids.length, checked: arr.length, bad: bad, unknown: unknown }));
+                    send(res, 200, JSON.stringify({
+                        ok: true, total: ids.length, checked: arr.length,
+                        bad: bad, unknown: unknown, netDown: !!netDown
+                    }));
                 });
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
@@ -2254,28 +2348,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         return;
     }
 
-    // steam:// 协议关联有可能失效（点了没反应）；直接用 Steam.exe 打开 URL 更可靠
-    let STEAM_EXE_CACHE = '';
-    function steamExePath() {
-        if (STEAM_EXE_CACHE) return STEAM_EXE_CACHE;
-        const keys = ['HKCU\\Software\\Classes\\steam\\shell\\open\\command', 'HKLM\\Software\\Classes\\steam\\shell\\open\\command'];
-        for (const k of keys) {
-            try {
-                const out = execSync('reg query "' + k + '" /ve', { windowsHide: true, timeout: 4000 }).toString();
-                const m = out.match(/"([^"]+[\\/]steam\.exe)"/i);
-                if (m && fs.existsSync(m[1])) { STEAM_EXE_CACHE = m[1]; return STEAM_EXE_CACHE; }
-            } catch (e) { /* 继续试下一个 key */ }
-        }
-        STEAM_EXE_CACHE = '';
-        return '';
-    }
-    function openSteamUrl(u) {
-        const exe = steamExePath();
-        try {
-            exec(exe ? ('cmd /c start "" "' + exe + '" "' + u + '"') : ('cmd /c start "" "' + u + '"'), () => { });
-        } catch (e) { /* 忽略 */ }
-        return !!exe;
-    }
+    // steamExePath / openSteamUrl / steamRunning 定义在文件顶层（启动游戏也用同一套）
 
     if (url === '/api/steam/subscribe' && req.method === 'POST') {
         let raw = '';
@@ -2290,9 +2363,23 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 }
                 const useWeb = b.mode === 'web';
                 if (!ids.length) throw new Error('没有可订阅的创意工坊 mod（本地 mod 无法订阅）');
-                const viaExe = openSteamUrl('steam://subscribe/' + ids[0]);
+                // 以前这里会先把第一条真发出去「试试能不能拉起」，后面的循环又从第一条重发一遍 ——
+                // 结果第一个 mod 弹两次订阅确认。现在只探测通道，不真的发。
+                const viaExe = !!steamExePath();
+                const running = steamRunning();
                 // 分批慢发：连着几十条打给 Steam 会被限流，之后社区页会变成各种报错页（包括「该物品不存在」）
                 const SIZE = 8, GAP = 800, CHUNK_GAP = 6000;
+                // dry=true：只回报「准备怎么发」，不真的拉起 Steam —— 用来自查发送次数对不对
+                if (b.dry) {
+                    const ch = Math.ceil(ids.length / SIZE);
+                    send(res, 200, JSON.stringify({
+                        ok: true, dry: true, count: ids.length, mode: useWeb ? 'web' : 'steam',
+                        chunks: ch, viaExe: !!steamExePath(), exe: steamExePath(), running: steamRunning(),
+                        seconds: Math.round((((ids.length % SIZE) || SIZE) - 1) * GAP / 1000 + (ch - 1) * CHUNK_GAP / 1000),
+                        willSend: ids.length, extra: 0
+                    }));
+                    return;
+                }
                 ids.forEach((id, i) => {
                     const u = useWeb ? ('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id) : ('steam://subscribe/' + id);
                     const wait = (i % SIZE) * GAP + Math.floor(i / SIZE) * CHUNK_GAP;
@@ -2304,6 +2391,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 const chunks = Math.ceil(ids.length / SIZE);
                 send(res, 200, JSON.stringify({
                     ok: true, count: ids.length, mode: useWeb ? 'web' : 'steam', chunks: chunks, viaExe: viaExe, exe: steamExePath(),
+                    running: running,
                     seconds: Math.round((((ids.length % SIZE) || SIZE) - 1) * GAP / 1000 + (chunks - 1) * CHUNK_GAP / 1000),
                 }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }

@@ -757,11 +757,15 @@ document.getElementById('joinCheck').onclick = async () => {
             ? '<div class="sev c">你这边有 ' + d.problems.length + ' 个问题（进别人房间也可能被要求重新下载）：</div><ul>'
                 + (d.problems || []).map(p => '<li>· ' + esc(p.name) + ' — ' + esc(p.why) + '</li>').join('') + '</ul>'
             : '<div class="sev i">你这边没问题：' + d.total + ' 个启用 mod 都在游戏加载目录，且版本与工坊一致。</div>';
+        const notesHtml = (d.notes || []).length
+            ? '<div class="sev i" style="margin-top:6px">另有 ' + d.notes.length + ' 条只是说明，不用处理：</div><ul>'
+                + d.notes.map(p => '<li>· ' + esc(p.name) + ' — ' + esc(p.why) + '</li>').join('') + '</ul>'
+            : '';
         const tips = (h.tips || []).length
             ? (h.tips || []).map(t => '<li><span class="sev ' + t.sev + '">·</span> ' + esc(t.text) + '</li>').join('')
             : '<li><span class="sev i">·</span> 没发现会导致队友掉线的问题。</li>';
         box.innerHTML = '<h3>联机自检（你是主机：' + (h.count || d.total || 0) + ' 个启用 mod · 约 ' + (h.totalMB || 0) + ' MB）</h3>' +
-            prob +
+            prob + notesHtml +
             '<div style="margin-top:8px" class="sev w">队友要准备的：</div><ul>' + tips + '</ul>' +
             '<div class="hint" style="margin-top:6px">队友的标准流程：' +
             '① 订阅下面清单里全部工坊 mod → ② 自己开一次单人游戏（触发 Steam 下载并把 mod 复制进加载目录）→ ' +
@@ -1064,7 +1068,8 @@ function renderSubscribe(list){
         try {
             const r = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: list.map(m => m.id), mode: mode }) });
             const d = await r.json();
-            show(d.ok ? ('已拉起 Steam，请在弹出的窗口里确认订阅（共 ' + d.count + ' 个）') : ('订阅失败：' + d.error), d.ok);
+            const noSteam1 = (d.ok && d.running === false) ? '（检测到 Steam 客户端当前没运行，确认窗可能弹不出来；已尝试帮你启动 Steam，完全起来后再点一次）' : '';
+            show(d.ok ? ('已拉起 Steam，请在弹出的窗口里确认订阅（共 ' + d.count + ' 个）' + noSteam1) : ('订阅失败：' + d.error), d.ok);
         } catch (e) { show('订阅失败：' + e.message, false); }
     };
     document.getElementById('subSteam').onclick = () => go('steam');
@@ -1203,7 +1208,8 @@ document.getElementById('btnSubLink').onclick = async () => {
             if (!ids.length) { show('没有可订阅的工坊 mod', false); return; }
             const rr = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: ids, mode: 'steam' }) });
             const dd = await rr.json();
-            show(dd.ok ? ('已拉起 Steam：共 ' + dd.count + ' 个，分 ' + (dd.chunks || 1) + ' 批慢慢弹（约 ' + (dd.seconds || 0) + ' 秒弹完），请在弹出的窗口里逐个确认。别急着连点，点太快会被 Steam 限流，之后页面会变成各种报错页') : ('订阅失败：' + dd.error), !!dd.ok);
+            const noSteam2 = (dd.ok && dd.running === false) ? '（检测到 Steam 客户端当前没运行，已尝试帮你启动；等它完全起来后再点一次，否则确认窗不会弹）' : '';
+            show(dd.ok ? ('已拉起 Steam：共 ' + dd.count + ' 个，分 ' + (dd.chunks || 1) + ' 批慢慢弹（约 ' + (dd.seconds || 0) + ' 秒弹完），请在弹出的窗口里逐个确认。别急着连点，点太快会被 Steam 限流，之后页面会变成各种报错页' + noSteam2) : ('订阅失败：' + dd.error), !!dd.ok);
         };
         document.getElementById('linkHtml').onclick = async () => {
             if (d.dead && d.dead.length) show('有 ' + d.dead.length + ' 个 mod 已从创意工坊失效，未列入清单', false);
@@ -1218,7 +1224,7 @@ document.getElementById('btnSubLink').onclick = async () => {
                 const rr = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: one, mode: 'steam' }) });
                 const dd = await rr.json();
                 show(dd.ok
-                    ? ('已发送订阅请求给 Steam（走 ' + (dd.viaExe ? ('Steam.exe 直连：' + dd.exe) : '系统 steam:// 协议') + '）。请看你电脑上 Steam 有没有弹出这个 mod 的订阅确认窗：弹出来了说明这条路通，之后用「自己先订阅一遍」就行；完全没动静说明 Steam 客户端当前接管不了链接，需要彻底退出 Steam 再重开一次')
+                    ? ('已发送订阅请求给 Steam（走 ' + (dd.viaExe ? ('Steam.exe 直连：' + dd.exe) : '系统 steam:// 协议') + '，Steam 客户端' + (dd.running === false ? '没运行' : '正在运行') + '）。看你电脑上 Steam 有没有弹出这个 mod 的订阅确认窗：弹出来了说明这条路通，之后用「自己先订阅一遍」就行；完全没动静的话' + (dd.running === false ? '多半是 Steam 没完全起来，等它完全启动后再测一次' : '彻底退出 Steam 再重开一次（协议关联有时会失效）'))
                     : ('失败：' + dd.error), !!dd.ok);
             } catch (e) { show('失败：' + e.message, false); }
             tb.disabled = false; tb.textContent = '测试能否拉起 Steam';
@@ -1239,16 +1245,21 @@ document.getElementById('btnSubLink').onclick = async () => {
         };
         document.getElementById('linkVerify').onclick = async () => {
             const vb = document.getElementById('linkVerify');
-            vb.disabled = true; vb.textContent = '校验中...';
+            vb.disabled = true; vb.textContent = '校验中（每个都要打开网页，' + list.length + ' 个约需 ' + Math.max(1, Math.round(list.length / 4 * 0.7)) + ' 秒）...';
             try {
                 const rr = await fetch('/api/steam/verify-links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ list: list }) });
                 const dd = await rr.json();
                 if (!dd.ok) { show('校验失败：' + dd.error, false); return; }
+                if (dd.netDown) {
+                    show('连不上 Steam 社区页面（试了 ' + dd.checked + '/' + dd.total + ' 条都没响应）——多半是当前网络访问不了 steamcommunity.com，校验没法进行。这不影响你自己玩；要给别人发 mod，用「导出mod文件」或直接发订阅清单页面更稳。', false);
+                    return;
+                }
                 const un = dd.unknown || [];
                 let msg = dd.bad.length
                     ? ('有 ' + dd.bad.length + ' 条链接网页打不开（多半是 mod 被作者删了）：' + dd.bad.map(x => (x.name || x.id) + '(' + x.id + ') ' + x.status).join('、'))
                     : ('全部 ' + dd.total + ' 条链接网页都能正常打开');
-                if (un.length) msg += '；另有 ' + un.length + ' 条因 Steam 限流没查到结果（' + un.map(x => x.id + ':' + x.status).slice(0, 5).join(',') + '），过几分钟再点一次校验即可';
+                if (un.length && un.length === dd.total) msg = '全部 ' + dd.total + ' 条都没查到结果（网络请求基本都没成功，返回状态如 ' + (un[0] && un[0].status) + '）。多半是网络访问不了 steamcommunity.com，不是链接本身有问题';
+                else if (un.length) msg += '；另有 ' + un.length + ' 条因 Steam 限流没查到结果（' + un.map(x => x.id + ':' + x.status).slice(0, 5).join(',') + '），过几分钟再点一次校验即可';
                 show(msg, !dd.bad.length);
             } catch (e) { show('校验失败：' + e.message, false); }
             vb.disabled = false; vb.textContent = '校验链接';
