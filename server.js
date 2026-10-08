@@ -11,6 +11,17 @@ const { exec, execSync, spawn } = require('child_process');
 const MAX_BODY = 256 * 1024 * 1024;   // 请求体上限 256MB（zip 走 base64 会膨胀约 1.4 倍）
 
 // 本地工具：任何漏网的异常都不该让服务直接退出，记到 server.err 里继续活着
+// 工坊页面请求里哪些属于「网络层失败」（连不上 / 超时）
+const isNetErr = r => r.status === 'TIMEOUT' || String(r.status).indexOf('ERR') === 0;
+
+// 统一的请求体解析：空/坏 JSON 一律当成 {}，由各接口自己校验必填字段并给中文提示，
+// 不要让 JSON.parse 直接把服务炸成 500
+function parseBody(raw) {
+    let v = null;
+    try { v = JSON.parse(raw); } catch (e) { v = null; }
+    return (v && typeof v === 'object') ? v : {};
+}
+
 function logFatal(kind, e) {
     try {
         fs.appendFileSync(path.join(__dirname, 'server.err'),
@@ -1011,6 +1022,58 @@ function rmDirSync(p) {
     try { fs.rmdirSync(p); } catch (_) {}
 }
 
+// 让出一次事件循环：复制删量大时用，避免整个服务卡住
+const breathe = () => new Promise(r => setImmediate(r));
+
+// 异步删除：每批结束让出事件循环，服务还能继续响应其它请求
+async function rmDirAsync(p) {
+    if (!fs.existsSync(p)) return;
+    if (fs.promises && fs.promises.rm) { try { await fs.promises.rm(p, { recursive: true, force: true }); return; } catch (e) { } }
+    let batch = 0;
+    const rmOne = async dir => {
+        let ents = [];
+        try { ents = await fs.promises.readdir(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const e of ents) {
+            const c = path.join(dir, e.name);
+            try {
+                if (e.isDirectory()) await rmOne(c);
+                else await fs.promises.unlink(c).catch(() => { });
+            } catch (_) { }
+            if (++batch % 200 === 0) await breathe();
+        }
+        try { await fs.promises.rmdir(dir); } catch (_) { }
+    };
+    await rmOne(p);
+}
+
+// 异步复制（覆盖式）：用真正的异步 IO，复制大文件时服务仍能响应其它请求
+async function copyDirAsync(src, dest) {
+    await fs.promises.mkdir(dest, { recursive: true }).catch(() => { });
+    let batch = 0;
+    const copyOne = async (srcDir, dstDir) => {
+        let ents = [];
+        try { ents = await fs.promises.readdir(srcDir, { withFileTypes: true }); } catch (e) { return; }
+        for (const e of ents) {
+            const a = path.join(srcDir, e.name), b = path.join(dstDir, e.name);
+            try {
+                if (e.isDirectory()) {
+                    await fs.promises.mkdir(b, { recursive: true }).catch(() => { });
+                    await copyOne(a, b);
+                } else if (e.isSymbolicLink()) {
+                    if (!fs.existsSync(b)) {
+                        const tgt = await fs.promises.readlink(a).catch(() => null);
+                        if (tgt) await fs.promises.symlink(tgt, b).catch(() => { });
+                    }
+                } else {
+                    await fs.promises.copyFile(a, b);   // 关键：异步复制，不堵事件循环
+                }
+            } catch (_) { }
+            if (++batch % 100 === 0) await breathe();
+        }
+    };
+    await copyOne(src, dest);
+}
+
 // 递归复制（覆盖式）
 function copyDir(src, dest) {
     fs.mkdirSync(dest, { recursive: true });
@@ -1074,7 +1137,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw) || {};
+                const b = parseBody(raw);
                 const n = save(b.list || [], !!b.allowEmpty);
                 __dataCache = { key: '', data: null };   // 配置已变，下次请求重新扫
                 send(res, 200, JSON.stringify({ ok: true, saved: n }));
@@ -1090,7 +1153,8 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const list = JSON.parse(raw).list; // [{id, enabled}]，当前显示顺序
+                const list = parseBody(raw).list; // [{id, enabled}]，当前显示顺序
+                if (!Array.isArray(list)) throw new Error('没读到要排序的 mod 列表，请刷新页面重试');
                 const data = buildData();
                 const byId = {};
                 data.active.concat(data.idle).forEach(m => { byId[m.id] = m; });
@@ -1117,7 +1181,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const bodyJson = JSON.parse(raw);
+                const bodyJson = parseBody(raw);
                 const list = bodyJson.list;
                 // 先把当前顺序写入游戏配置，让启动的游戏用这套顺序
                 save(list);
@@ -1185,7 +1249,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw);
+                const b = parseBody(raw);
                 const store = loadUserZh();
                 const cur = store[b.id] || {};
                 if (typeof b.zh === 'string') cur.zh = b.zh;
@@ -1313,7 +1377,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const D = saveDirs();
                 const dir = b.kind === 'multi' ? D.multi : D.single;
                 if (!dir || !fs.existsSync(dir)) throw new Error('找不到存档目录');
@@ -1334,7 +1398,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const src = safeBackupPath(b.id);
                 if (!src || !fs.existsSync(src)) throw new Error('备份不存在');
                 const parts = String(b.id).split('/');
@@ -1365,7 +1429,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const p = safeBackupPath(b.id);
                 if (!p || !fs.existsSync(p)) throw new Error('备份不存在');
                 fs.rmSync(p, { recursive: true, force: true });
@@ -1379,7 +1443,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const D = saveDirs();
                 let dir = BACKUP_ROOT;
                 if (b.target === 'single') dir = D.single;
@@ -1454,7 +1518,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw) || {};
+                const b = parseBody(raw);
                 let dir = String(b.dir || '').trim();
                 if (!dir) { send(res, 400, JSON.stringify({ ok: false, error: '没填目录' })); return; }
                 dir = path.resolve(dir);
@@ -1507,7 +1571,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw);
+                const b = parseBody(raw);
                 const file = String((b && b.file) || '');
                 if (!/^config_[A-Za-z0-9\-_]+\.xml$/.test(file)) return send(res, 400, JSON.stringify({ ok: false, error: '备份名不合法' }));
                 const hd = path.join(DATA_DIR, 'confighistory');
@@ -1686,7 +1750,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const man = hostManifest();
                 if (!man.count) throw new Error('当前没有启用任何 mod，先保存一次再生成');
                 const genAt = new Date().toLocaleString('zh-CN', { hour12: false });
@@ -1722,7 +1786,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const host = (b.items || []).filter(x => x && x.id != null).map(x => String(x.id));
                 if (!host.length) throw new Error('清单是空的，重新生成一次检查页');
                 const data = buildData();
@@ -1775,7 +1839,7 @@ const server = http.createServer((req, res) => {
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw) || {};
+                const b = parseBody(raw);
                 if (b.clear) {
                     // 以前漏了 localmods：「恢复自动」后本地 mod 目录还一直是手动值
                     saveUserPaths({ game: '', workshop: '', installed: '', localmods: '' });
@@ -1812,7 +1876,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw);
+                const b = parseBody(raw);
                 const prev = loadShare();
                 saveShare({ folder: (b.folder || '').trim(), minimize: b.minimize === undefined ? (prev.minimize === true) : !!b.minimize });
                 send(res, 200, JSON.stringify({ ok: true }));
@@ -1827,7 +1891,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', async () => {
             try {
-                const b = JSON.parse(raw);
+                const b = parseBody(raw);
                 const folder = resolveShareFolder(b.folder);
                 const ids = (b.list || []).map(x => safeModId(x && x.id)).filter(Boolean);
                 if (!ids.length) throw new Error('当前没有已启用的 mod 可导出');
@@ -1847,8 +1911,16 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                             if (!e.isDirectory()) continue;
                             if (keep.has(e.name)) continue;
                             if (!safeModId(e.name)) continue;
-                            rmDirSync(path.join(folder, e.name));
+                            await rmDirAsync(path.join(folder, e.name));
                             cleaned++;
+
+                            // 顺带清掉上次生成的订阅清单 / 一致性检查页：文件名带时间戳，不清会越攒越多
+                            for (const f of fs.readdirSync(folder, { withFileTypes: true })) {
+                                if (f.isDirectory()) continue;
+                                if (/^subscribe.*\.html$/i.test(f.name) || /^联机一致性检查.*\.html$/i.test(f.name)) {
+                                    try { fs.unlinkSync(path.join(folder, f.name)); } catch (_) { }
+                                }
+                            }
                         }
                     }
                 } catch (e) { /* 清理失败不影响导出 */ }
@@ -1857,8 +1929,8 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                     const src = shareModDir(id);
                     if (!fs.existsSync(src)) { skipped.push(id); continue; }
                     const dest = path.join(folder, id);
-                    rmDirSync(dest);
-                    copyDir(src, dest);
+                    await rmDirAsync(dest);
+                    await copyDirAsync(src, dest);
                     count++;
                 }
                 const manifest = {
@@ -1873,7 +1945,12 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                         .map(m => ({ id: String(m.id), name: m.name || '', zh: m.zh || '' }));
                     if (wsList.length) {
                         // 失效的（被作者删除/转私密）不能进订阅清单，否则对方点了就是 404 报错页
-                        const aliveMap = await new Promise(resolve => checkWsAlive(wsList.map(m => m.id), resolve));
+                        // 这一步只是「顺手多发一份订阅清单」，网络不通就该立刻放弃，不能拖住导出：
+                        // 实测断网时逐个超时能把整个导出拖成几十秒无响应
+                        const aliveMap = await Promise.race([
+                            new Promise(resolve => checkWsAlive(wsList.map(m => m.id), resolve)),
+                            new Promise(resolve => setTimeout(() => resolve(null), 4000)),
+                        ]);
                         const liveList = aliveMap ? wsList.filter(m => aliveMap.get(m.id) !== false) : wsList;
                         if (liveList.length) {
                             const genAt2 = new Date().toLocaleString('zh-CN', { hour12: false });
@@ -1920,7 +1997,9 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                         else { zipError = zipError || '压缩失败（未生成文件）'; zipPath = ''; }
                     } catch (e) { zipError = String(e.message || e).slice(0, 120); zipPath = ''; }
                 }
-                send(res, 200, JSON.stringify({ ok: true, count, skipped, cleaned, zip: zipPath, zipSize, zipError }));
+                // folder 必须回给界面：导出目录可能是用户自定义的，不返回的话界面
+                // 既没法告诉用户「导出去哪了」，后面的导入也拿不到路径
+                send(res, 200, JSON.stringify({ ok: true, count, skipped, cleaned, folder, zip: zipPath, zipSize, zipError }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
         return;
@@ -1931,7 +2010,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw);
+                const b = parseBody(raw);
                 // browser：直接用默认浏览器打开（订阅清单页面），绕开浏览器对同名本地文件的缓存
                 if (b.browser && b.select && fs.existsSync(String(b.select))) {
                     const sel0 = String(b.select);
@@ -1970,7 +2049,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         return;
     }
     // 从一个 mod 包文件夹导入：复制到工坊 / 本地 mod 目录，按 manifest 的启用顺序返回
-    function doImport(folder) {
+    async function doImport(folder) {
         if (!fs.existsSync(folder)) throw new Error('还没有可导入的内容：' + folder);
         const mfPath = path.join(folder, 'manifest.json');
         if (!fs.existsSync(mfPath)) throw new Error('该文件夹里没有 manifest.json，不是有效的 mod 包');
@@ -1994,9 +2073,9 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             const stampT = Date.now() + '_' + Math.random().toString(36).slice(2, 7);
             const tmpD = path.join(W, id + '.tmp_' + stampT);
             const oldD = path.join(W, id + '.old_' + stampT);
-            rmDirSync(tmpD);
-            try { copyDir(src, tmpD); }
-            catch (e) { rmDirSync(tmpD); throw new Error('复制失败（原来的 mod 没动）：' + e.message); }
+            await rmDirAsync(tmpD);
+            try { await copyDirAsync(src, tmpD); }
+            catch (e) { await rmDirAsync(tmpD); throw new Error('复制失败（原来的 mod 没动）：' + e.message); }
             let renamed = false;
             if (fs.existsSync(dest)) {
                 try { fs.renameSync(dest, oldD); renamed = true; }
@@ -2005,10 +2084,10 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
             try { fs.renameSync(tmpD, dest); }
             catch (e) {
                 if (renamed) { try { fs.renameSync(oldD, dest); } catch (e2) { } }
-                rmDirSync(tmpD);
+                await rmDirAsync(tmpD);
                 throw new Error('替换失败（已还原原来的 mod）：' + e.message);
             }
-            if (renamed) rmDirSync(oldD);
+            if (renamed) await rmDirAsync(oldD);
             imported++;
         }
         return { imported: imported, skipped: skipped, active: ids, items: items };
@@ -2020,7 +2099,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', async () => {
             try {
-                const b = JSON.parse(raw);
+                const b = parseBody(raw);
                 const name = String(b.name || 'mods.zip');
                 const buf = Buffer.from(String(b.data || ''), 'base64');
                 if (!buf.length) throw new Error('没有收到 zip 内容');
@@ -2051,7 +2130,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                 })(ex, 0);
                 if (!target && fs.existsSync(path.join(ex, 'manifest.json'))) target = ex;
                 if (!target) throw new Error('这个 zip 里没有 manifest.json，不是本工具导出的 mod 包');
-                const r0 = doImport(target);
+                const r0 = await doImport(target);
                 __dataCache = { key: '', data: null };
                 try { rmDirSync(tmp); } catch (e) { }
                 const out = { ok: true, fromZip: name };
@@ -2065,11 +2144,11 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     if (url === '/api/share/import' && req.method === 'POST') {
         let raw = "";
         req.on('data', d => { raw += d; });
-        req.on('end', () => {
+        req.on('end', async () => {
             try {
-                const b = JSON.parse(raw);
+                const b = parseBody(raw);
                 const folder = resolveShareFolder(b.folder);
-                const r0 = doImport(folder);
+                const r0 = await doImport(folder);
                 send(res, 200, JSON.stringify({ ok: true, imported: r0.imported, skipped: r0.skipped, active: r0.active, items: r0.items }));
             } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
         });
@@ -2172,7 +2251,6 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     // 注意：每个工坊页都内嵌一段「This item has been removed...」的隐藏模板，不能拿它当失效依据
     function checkWsWebAlive(ids, cb) {
         const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept-Language': 'zh-CN,zh' };
-        const isNetErr = r => r.status === 'TIMEOUT' || String(r.status).indexOf('ERR') === 0;
         const one = (id, retry) => new Promise(resolve => {
             const rq = https.request('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id, {
                 method: 'GET', timeout: 15000, rejectUnauthorized: false, headers: UA
@@ -2240,7 +2318,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const ids = (b.list || []).map(m => String((m && m.id) == null ? '' : m.id).trim()).filter(x => __isWs(x));
                 if (!ids.length) throw new Error('没有可订阅的工坊 mod');
                 send(res, 200, JSON.stringify({ ok: true, count: ids.length, script: webSubScript(ids) }));
@@ -2254,7 +2332,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const src = (b.list || []).map(m => ({
                     id: String((m && m.id) == null ? '' : m.id).trim(),
                     name: (m && (m.zh || m.name)) || '',
@@ -2298,7 +2376,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', async () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const all = (b.list || []).map(m => ({
                     id: String((m && m.id) == null ? '' : m.id).trim(),
                     name: (m && (m.name || '')) || '',
@@ -2355,7 +2433,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const ids = [];
                 for (const x of (b.ids || [])) {
                     const id = String(x == null ? '' : x).trim();
@@ -2419,7 +2497,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const file = __presetFile(b.name);
                 if (!file) throw new Error('请先给方案起个名字');
                 if (!(b.list || []).length) throw new Error('当前没有已启用的 mod，没什么可存');
@@ -2442,7 +2520,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const file = __presetFile(b.name);
                 if (!file || !fs.existsSync(file)) throw new Error('找不到这个方案');
                 const d = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
@@ -2461,7 +2539,7 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
         req.on('data', d => { raw += d; });
         req.on('end', () => {
             try {
-                const b = JSON.parse(raw || '{}');
+                const b = parseBody(raw);
                 const file = __presetFile(b.name);
                 if (!file || !fs.existsSync(file)) throw new Error('找不到这个方案');
                 fs.unlinkSync(file);
