@@ -1071,7 +1071,7 @@ function renderSubscribe(list){
             const r = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: list.map(m => m.id), mode: mode }) });
             const d = await r.json();
             const noSteam1 = (d.ok && d.running === false) ? '（检测到 Steam 客户端当前没运行，确认窗可能弹不出来；已尝试帮你启动 Steam，完全起来后再点一次）' : '';
-            show(d.ok ? ('已拉起 Steam，请在弹出的窗口里确认订阅（共 ' + d.count + ' 个）' + noSteam1) : ('订阅失败：' + d.error), d.ok);
+            show(d.ok ? ('已拉起 Steam，会逐个弹出「确认订阅」窗（共 ' + d.count + ' 个）—— 每个都要在 Steam 里点「订阅」，别漏了' + noSteam1) : ('订阅失败：' + d.error), d.ok);
         } catch (e) { show('订阅失败：' + e.message, false); }
     };
     document.getElementById('subSteam').onclick = () => go('steam');
@@ -1264,7 +1264,7 @@ function wireSyncResult(c, theirs) {
             if (!d.ok) { show('订阅失败：' + d.error, false); return; }
             show('已拉起 Steam 客户端：共 ' + d.count + ' 个，会分批慢慢弹（约 ' + d.seconds + ' 秒弹完），请在 Steam 弹窗里逐个点「订阅」。' +
                 (d.running === false ? '检测到 Steam 当前没运行，我先试着启动了它 —— 等它完全起来后没反应就再点一次。' : '') +
-                '下载完成后回来点「一键对齐本机」。', true);
+                '每个确认窗都要在 Steam 里点「订阅」才算数。下载完成后回来点「一键对齐本机」。', true);
         } catch (e) { show('订阅失败：' + e.message, false); }
     };
     const ap = document.getElementById('syncApply');
@@ -1341,7 +1341,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             const rr = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: ids, mode: 'steam' }) });
             const dd = await rr.json();
             const noSteam2 = (dd.ok && dd.running === false) ? '（检测到 Steam 客户端当前没运行，已尝试帮你启动；等它完全起来后再点一次，否则确认窗不会弹）' : '';
-            show(dd.ok ? ('已拉起 Steam：共 ' + dd.count + ' 个，分 ' + (dd.chunks || 1) + ' 批慢慢弹（约 ' + (dd.seconds || 0) + ' 秒弹完），请在弹出的窗口里逐个确认。别急着连点，点太快会被 Steam 限流，之后页面会变成各种报错页' + noSteam2) : ('订阅失败：' + dd.error), !!dd.ok);
+            show(dd.ok ? ('已开始：Steam 主窗口会被拉到前台，随后共 ' + dd.count + ' 个分 ' + (dd.chunks || 1) + ' 批慢慢弹（约 ' + (dd.seconds || 0) + ' 秒弹完）。每个确认窗都要在 Steam 里点「订阅」才算订阅成功 —— 别急着连点，太快会被 Steam 限流' + noSteam2) : ('订阅失败：' + dd.error), !!dd.ok);
         };
         document.getElementById('linkHtml').onclick = async () => {
             if (d.dead && d.dead.length) show('有 ' + d.dead.length + ' 个 mod 已从创意工坊失效，未列入清单', false);
@@ -1356,7 +1356,7 @@ document.getElementById('btnSubLink').onclick = async () => {
                 const rr = await fetch('/api/steam/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: one, mode: 'steam' }) });
                 const dd = await rr.json();
                 show(dd.ok
-                    ? ('已发送订阅请求给 Steam（走 ' + (dd.viaExe ? ('Steam.exe 直连：' + dd.exe) : '系统 steam:// 协议') + '，Steam 客户端' + (dd.running === false ? '没运行' : '正在运行') + '）。看你电脑上 Steam 有没有弹出这个 mod 的订阅确认窗：弹出来了说明这条路通，之后用「自己先订阅一遍」就行；完全没动静的话' + (dd.running === false ? '多半是 Steam 没完全起来，等它完全启动后再测一次' : '彻底退出 Steam 再重开一次（协议关联有时会失效）'))
+                    ? ('已发送：会先把 Steam 主窗口拉到前台，再弹订阅确认窗（走 ' + (dd.viaExe ? ('Steam.exe 直连：' + dd.exe) : '系统 steam:// 协议') + '，Steam 客户端' + (dd.running === false ? '没运行' : '正在运行') + '）。留意 Steam 里有没有弹出「确认订阅」窗 —— 弹了就点「订阅」；完全没动静的话' + (dd.running === false ? '多半是 Steam 还没完全起来，等它彻底启动后再测一次' : '先手动把 Steam 主窗口打开（缩在右下角托盘里时确认窗常常不弹，这是最常见的原因），再点一次测试'))
                     : ('失败：' + dd.error), !!dd.ok);
             } catch (e) { show('失败：' + e.message, false); }
             tb.disabled = false; tb.textContent = '测试能否拉起 Steam';

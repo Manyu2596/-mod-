@@ -719,6 +719,19 @@ function steamRunning() {
         return /steam\.exe/i.test(out);
     } catch (e) { return true; }   // 查不到就当作在运行，不影响正常流程
 }
+// Steam 主窗口没露面（只在托盘里 / 缩在后台）时，steam://subscribe/ 的订阅确认窗经常压根不弹，
+// 看着像工具坏了 —— 发订阅前先用 steam://open/main 把主窗口拉出来，等它露头了再发订阅。
+let STEAM_WAKE_AT = 0;
+function ensureSteamWake() {
+    const now = Date.now();
+    if (now - STEAM_WAKE_AT < 20000) return;      // 20 秒内不必重复唤醒
+    STEAM_WAKE_AT = now;
+    const exe = steamExePath();
+    try {
+        if (exe) exec('cmd /c start "" "' + exe + '" "steam://open/main"', { windowsHide: true }, () => { });
+        else exec('cmd /c start "" "steam://open/main"', { windowsHide: true }, () => { });
+    } catch (e) { /* 忽略 */ }
+}
 function openSteamUrl(u) {
     const exe = steamExePath();
     try {
@@ -1988,10 +2001,11 @@ const server = http.createServer((req, res) => {
                 const ids = [];
                 cmp.missing.forEach(x => { if (x.ws && !ids.includes(x.id)) ids.push(x.id); });
                 if (!ids.length) throw new Error('没有需要从 Steam 订阅的（缺的都是本地 mod，只能让对方把文件发给你）');
-                const SIZE = 8, GAP = 800, CHUNK_GAP = 6000;
+                const SIZE = 8, GAP = 800, CHUNK_GAP = 6000, WAKE = 1800;
+                ensureSteamWake();
                 ids.forEach((id, i) => {
-                    const wait = (i % SIZE) * GAP + Math.floor(i / SIZE) * CHUNK_GAP;
-                    setTimeout(() => { openSteamUrl('steam://subscribe/' + id); }, wait);
+                    const wait = WAKE + (i % SIZE) * GAP + Math.floor(i / SIZE) * CHUNK_GAP;
+                    setTimeout(() => { ensureSteamWake(); openSteamUrl('steam://subscribe/' + id); }, wait);
                 });
                 send(res, 200, JSON.stringify({
                     ok: true, count: ids.length,
@@ -2639,11 +2653,14 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
                     }));
                     return;
                 }
+                const WAKE = useWeb ? 0 : 1800;   // 给 Steam 主窗口留出露头的时间
+                if (!useWeb) ensureSteamWake();
                 ids.forEach((id, i) => {
                     const u = useWeb ? ('https://steamcommunity.com/sharedfiles/filedetails/?id=' + id) : ('steam://subscribe/' + id);
-                    const wait = (i % SIZE) * GAP + Math.floor(i / SIZE) * CHUNK_GAP;
+                    const wait = WAKE + (i % SIZE) * GAP + Math.floor(i / SIZE) * CHUNK_GAP;
                     setTimeout(() => {
                         if (useWeb) { try { exec('cmd /c start "" "' + u + '"'); } catch (e) { /* 忽略 */ } return; }
+                        ensureSteamWake();
                         openSteamUrl(u);
                     }, wait);
                 });
