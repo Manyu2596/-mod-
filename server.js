@@ -494,6 +494,139 @@ function dataFingerprint() {
     return parts.join('#');
 }
 
+// ---------- mod 的「客户端 / 服务端」标签 ----------
+// 实测你机器上这 62 个 mod 的 filelist.xml：里面压根没有 clientside= / side= 这类官方字段，
+// 根元素只有 name / modversion / gameversion / expectedhash / installtime / steamworkshopid /
+// corepackage / altnames，子元素甚至只有一个 file= 属性。也就是说 —— 游戏没有留给我们一个
+// 「这是客户端 mod」的开关可读，只能推测，并且在界面上如实标出把握有多大：
+//   ① 带脚本的：看脚本落在哪个目录（CSharp/Client、Lua/…/Client vs …/Server）—— 作者自己写的
+//      目录名，算「确定」。
+//   ② 不带脚本的：看它往游戏里塞的是哪类内容（analyze 已经统计好各元素数量）——
+//      只改文案/界面/音效/特效，还是动了潜艇、物品、角色、天赋、事件这些 —— 算「推断」，
+//      因为 Barotrauma 联机时原则上要求双端 content package 完全一致。
+const SIDE_LOGIC = new Set(['Submarine', 'Submarines', 'Item', 'Character', 'Characters', 'Talents', 'TalentTrees',
+    'Afflictions', 'Wreck', 'BeaconStation', 'OutpostModule', 'OutpostConfig', 'Outpost', 'RandomEvents',
+    'Missions', 'Jobs', 'NPCSets', 'NPCConversations', 'NPCPersonalityTraits', 'LevelGenerationParameters',
+    'MapGenerationParameters', 'LocationTypes', 'Factions', 'Structure', 'UpgradeModules', 'LevelObjectPrefabs',
+    'BackgroundCreaturePrefabs', 'StartItems', 'Corpses', 'Tutorials', 'Orders', 'ItemAssembly', 'ServerExecutable']);
+const SIDE_VISUAL = new Set(['Text', 'UIStyle', 'Sounds', 'Particles', 'Decals']);
+const SIDE_SCRIPT_CACHE = {};
+let SIDE_OVER = null;
+function sideOverrideFile() { return path.join(DATA_DIR, 'modside.json'); }
+function loadSideOverride() {
+    if (SIDE_OVER) return SIDE_OVER;
+    try { SIDE_OVER = JSON.parse(fs.readFileSync(sideOverrideFile(), 'utf8')) || {}; }
+    catch (e) { SIDE_OVER = {}; }
+    return SIDE_OVER;
+}
+function filelistOf(id) {
+    const P = getPaths();
+    const cands = [];
+    if (P.INSTALLED) cands.push(path.join(P.INSTALLED, id, 'filelist.xml'));
+    if (P.WORKSHOP) cands.push(path.join(P.WORKSHOP, id, 'filelist.xml'));
+    if (P.LOCALMODS) cands.push(path.join(P.LOCALMODS, id, 'filelist.xml'));
+    for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch (e) { } }
+    return '';
+}
+// 只有带脚本的 mod 才需要真去读文件（看脚本路径）：你这里 62 个里只有 5 个，开销可以忽略
+function scriptSides(id) {
+    if (SIDE_SCRIPT_CACHE[id]) return SIDE_SCRIPT_CACHE[id];
+    const out = { client: 0, server: 0, both: 0, has: false, from: '' };
+    const count = fp => {
+        const p = String(fp).replace(/\\/g, '/');
+        if (!/\.(cs|lua|dll)$/i.test(p)) return;
+        out.has = true;
+        if (/\/client\//i.test(p)) out.client++;
+        else if (/\/server\//i.test(p)) out.server++;
+        else out.both++;      // 根目录 / Shared / Autorun —— LuaCs 在两端都会加载
+    };
+    const f = filelistOf(id);
+    if (f) {
+        try {
+            const xml = fs.readFileSync(f, 'utf8');
+            const er = /<([A-Za-z][A-Za-z0-9_]*)\s+file="([^"]*)"[^>]*?\/?>/g;
+            let e;
+            while ((e = er.exec(xml))) count(e[2]);
+        } catch (err) { }
+    }
+    // 新一代 LuaCs mod 不往 filelist.xml 里写脚本，而是整个 Lua/ CSharp/ 目录塞给框架自动加载 ——
+    // 这种情况 filelist 里一无所获，只能直接进目录看作者把它放在 Client / Server 哪一边
+    if (!out.has && f) {
+        const dir = path.dirname(f);
+        ['Lua', 'CSharp', 'Scripts'].forEach(sub => {
+            const base = path.join(dir, sub);
+            if (!fs.existsSync(base)) return;
+            (function walk(d, depth) {
+                if (depth > 6) return;
+                let es; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+                for (const en of es) {
+                    const p = path.join(d, en.name);
+                    if (en.isDirectory()) walk(p, depth + 1); else count(p);
+                }
+            })(base, 0);
+        });
+        if (out.has) out.from = 'directory';
+    }
+    SIDE_SCRIPT_CACHE[id] = out;
+    return out;
+}
+// a = analyze() 的结果（含 tags 元素计数、hasLua / hasCs）
+function detectSide(id, a) {
+    const tags = (a && a.tags) || {};
+    const logicKeys = Object.keys(tags).filter(k => SIDE_LOGIC.has(k));
+    const visualKeys = Object.keys(tags).filter(k => SIDE_VISUAL.has(k));
+    // 标了 hasLua/hasCs 的、或者压根没有任何 XML 元素的，都去查一下脚本
+    const needScript = !!(a && (a.hasLua || a.hasCs)) || !Object.keys(tags).length;
+    const sc = needScript ? scriptSides(id) : { client: 0, server: 0, both: 0, has: false, from: '' };
+    let r;
+    if (sc.has) {
+        // 脚本落在哪个目录是作者自己分的；再拿它改的 XML 内容类型印证一层：
+        // 光有脚本但没有内容、或者脚本压根没分 Client/Server，就退一步当「两边都要」 —— 少装一边会掉线，
+        // 反过来多装一个不会出事，所以不确定的时候宁可靠向「两端都要」
+        const parts = [];
+        if (sc.client) parts.push('客户端脚本 ' + sc.client + ' 个');
+        if (sc.server) parts.push('服务端脚本 ' + sc.server + ' 个');
+        if (sc.both) parts.push('没放进 Client/Server 专属目录的脚本 ' + sc.both + ' 个');
+        const detail = parts.join('，');
+        if (sc.server) {
+            r = (sc.client || sc.both)
+                ? { side: 'both', sure: true, reason: detail + ' —— 两边都得装' }
+                : { side: 'server', sure: true, reason: detail + ' —— 房主必须装；普通队友装了不起作用' };
+        } else if (sc.client) {
+            r = logicKeys.length
+                ? { side: 'both', sure: true, reason: detail + '，但它还改了 ' + logicKeys.slice(0, 3).join('、') + ' 这类会影响联机一致性的内容 —— 两边都得装' }
+                : { side: 'client', sure: true, reason: detail + (visualKeys.length ? ('，另外改了 ' + visualKeys.join('、')) : '') + ' —— 只影响你自己这边看到的东西' };
+        } else if (logicKeys.length) {
+            r = { side: 'both', sure: true, reason: detail + '，另外还改了 ' + logicKeys.slice(0, 3).join('、') + ' 这类会影响联机一致性的内容 —— 两边都得装' };
+        } else if (visualKeys.length) {
+            r = { side: 'client', sure: false, reason: '推断：' + detail + '，但它改的东西只有 ' + visualKeys.join('、') + '（文案 / 界面 / 音效 / 特效），多半只是改你自己看到的画面' };
+        } else {
+            r = { side: 'both', sure: false, reason: detail + '，既没划分 Client/Server、也没有别的 XML 内容可参照 —— 稳妥起见按「两边都得装」算' };
+        }    } else if (!Object.keys(tags).length) {
+        r = { side: 'unknown', sure: false, reason: '既没有 XML 内容元素、也没找到 Lua/C# 脚本，判断不了' };
+    } else if (logicKeys.length) {
+        r = { side: 'server', sure: false, reason: '推断：改的是 ' + logicKeys.slice(0, 3).join('、') + ' 这类逻辑内容 —— 房主要装，队友最好也一致（不然开局那一下大概率掉线）' };
+    } else if (visualKeys.length) {
+        r = { side: 'client', sure: false, reason: '推断：只改 ' + visualKeys.join('、') + '（文案 / 界面 / 音效 / 特效），只影响你自己看到的东西' };
+    } else {
+        r = { side: 'unknown', sure: false, reason: '用到的内容类型（' + Object.keys(tags).slice(0, 3).join('、') + '）不在已知清单里，不敢乱标' };
+    }
+    r.logic = logicKeys; r.visual = visualKeys;
+    r.scripts = { client: sc.client, server: sc.server, both: sc.both };
+    return r;
+}
+// 自动判定 + 用户手动修正，合成最终展示的标签
+function sideTagOf(id, auto) {
+    const over = loadSideOverride()[id];
+    const LABEL = { client: '客户端', server: '服务端', both: '两端都要', unknown: '看不出' };
+    if (over && LABEL[over]) {
+        return { side: over, sure: false, manual: true, reason: '这是你手动指定的标签，没有用自动判断的结果' };
+    }
+    const d = auto || { side: 'unknown', reason: '' };
+    return { side: d.side, sure: !!d.sure, manual: false, reason: d.reason || '', logic: d.logic || [], visual: d.visual || [], scripts: d.scripts || { client: 0, server: 0, both: 0 } };
+}
+
+
 // ---------- 扫描所有 mod ----------
 function buildData() {
     const enabledIds = loadEnabledIds();
@@ -529,6 +662,7 @@ function buildData() {
             mods.push(Object.assign(a, {
                 tier: c.tier + patchBonus,
                 cat: c.cat,
+                side: sideTagOf(id, detectSide(id, a)),
                 old: a.gameversion !== lib.GAME_VERSION,
                 enabled: enabledIds.has(id),
                 zh,
@@ -1945,6 +2079,30 @@ const server = http.createServer((req, res) => {
             missing: missing, willEnable: willEnable, extra: extra, verDiff: verDiff, order: order,
             remoteLocalMods: remote.i.filter(x => !x.w).length,
         };
+    }
+
+    // 手动指定某个 mod 的标签（自动判断难免有看走眼的时候，以你按的为准，并且重启后仍然记得）
+    if (url === '/api/mods/side' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = parseBody(raw);
+                const id = String(b.id || '').trim();
+                if (!id) throw new Error('缺少 mod id');
+                const v = String(b.value || 'auto');
+                if (['auto', 'client', 'server', 'both', 'unknown'].indexOf(v) < 0) throw new Error('标签值不认识：' + v);
+                const over = loadSideOverride();
+                if (v === 'auto') delete over[id]; else over[id] = v;
+                SIDE_OVER = over;
+                try { fs.writeFileSync(sideOverrideFile(), JSON.stringify(over, null, 2), 'utf8'); }
+                catch (e) { throw new Error('标签没能保存下来：' + e.message); }
+                const label = { client: '客户端', server: '服务端', both: '两端都要', unknown: '看不出', auto: '已恢复自动判断' }[v];
+                __dataCache = { key: '', data: null };
+                send(res, 200, JSON.stringify({ ok: true, id: id, value: v, label: label }));
+            } catch (e2) { send(res, 500, JSON.stringify({ ok: false, error: e2.message })); }
+        });
+        return;
     }
 
     // 生成自己这套方案的短码（同时存一份到导出文件夹，方便直接发文件）

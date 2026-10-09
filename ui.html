@@ -123,6 +123,14 @@ li:hover .grip{color:#8b94a8}
 .dsc{color:#8b94a8;font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tagd{background:#4a1a1e;color:#f87171;font-size:10.5px;padding:1px 6px;border-radius:8px}
 .tagw{background:#4a3a12;color:#fbbf24;font-size:10.5px;padding:1px 6px;border-radius:8px}
+/* 客户端 / 服务端标签：实心底色 = 有把握（按脚本落在哪个目录判的）；虚线边框且带 ? = 只是推断 */
+.sdb{display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;margin-right:5px;cursor:pointer;border:1px solid transparent;vertical-align:1px}
+.sd-client{background:#123a4f;color:#7dd3fc;border-color:#1d5a78}
+.sd-server{background:#46290f;color:#fdba74;border-color:#6e4019}
+.sd-both{background:#123f37;color:#6ee7b7;border-color:#1c6558}
+.sd-unknown{background:#232b3d;color:#8b94a8;border-color:#2f3950}
+.sdb.guess{border-style:dashed}
+.sdb:hover{filter:brightness(1.2)}
 /* 分类色标：①~⑧ 各一个颜色，一眼看出分层 */
 .catb{display:inline-block;font-size:10.5px;padding:1px 8px;border-radius:20px;margin-right:6px;border:1px solid transparent}
 .ct1{background:#16324f;color:#93c5fd;border-color:#25507d}
@@ -221,6 +229,10 @@ body.light .go{color:#0e7490;background:#eef3fa;border-color:#d3dae7}
 body.light .go:hover{background:#e2eaf5;border-color:#b9c6dd}
 body.light .tagd{background:#fde8ea;color:#b42318}
 body.light .tagw{background:#fdf3d8;color:#8a5a00}
+body.light .sd-client{background:#e0f2fe;color:#0369a1;border-color:#7dd3fc}
+body.light .sd-server{background:#ffedd5;color:#9a3412;border-color:#fdba74}
+body.light .sd-both{background:#d1fae5;color:#065f46;border-color:#6ee7b7}
+body.light .sd-unknown{background:#eef2f7;color:#5b6478;border-color:#c4cbd8}
 body.light .catb{filter:brightness(.97) saturate(1.04)}
 body.light ::-webkit-scrollbar-thumb{background:#c9d0e0;border:3px solid transparent;background-clip:padding-box}
 body.light ::-webkit-scrollbar-thumb:hover{background:#aab3c8}
@@ -307,6 +319,7 @@ body.light .idx{background:#f1f3f9;border-color:#dfe4ee}
       <button id="btnTheme" title="深色 / 浅色界面切换（记住选择）">浅色模式</button>
     </div>
   </span>
+  <button id="btnSideFilter" title="按「客户端 / 服务端」标签筛选（点一下换一个）">全部</button>
   <span class="spacer"></span>
   <span class="sbox" id="sBox">
     <input id="search" placeholder="搜索：名称 / 中文名 / 分类 / ID（空格分隔多个词）" spellcheck="false" autocomplete="off">
@@ -514,7 +527,7 @@ function makeItem(m, i, isActive){
         '<div class="info"><div class="nm">' + zhHtml + hlEsc(m.name) +
         (danger ? ' <span class="tagd">旧框架·建议停用</span>' : '') +
         (miss.length ? ' <span class="tagw" title="' + esc(miss.map(x => x.why).join('；')) + '">缺前置：' + esc(miss.map(x => x.name).join('、')) + '</span>' : '') +
-        '</div><div class="meta">' + (di ? '<span class="catb ct' + di + '">' + hlEsc(m.cat) + '</span>' : hlEsc(m.cat)) + ' · v' + esc(m.modversion) + (m.sizeText ? (' · ' + esc(m.sizeText) + (m.files ? (' / ' + esc(m.files) + ' 文件') : '')) : '') + '</div>' +
+        '</div><div class="meta">' + sideBadge(m) + (di ? '<span class="catb ct' + di + '">' + hlEsc(m.cat) + '</span>' : hlEsc(m.cat)) + ' · v' + esc(m.modversion) + (m.sizeText ? (' · ' + esc(m.sizeText) + (m.files ? (' / ' + esc(m.files) + ' 文件') : '')) : '') + '</div>' +
         (m.desc ? '<div class="dsc" title="' + esc(m.desc) + '">' + hlEsc(m.desc) + '</div>' : '') +
         '</div>' +
         (m.workshop ? '<a class="go" href="' + esc(m.workshop) + '" target="_blank" rel="noopener" title="在创意工坊打开这个 mod">创意工坊 ↗</a>' : '') +
@@ -604,12 +617,50 @@ function clearOver(){
     document.querySelectorAll('li.over').forEach(x => x.classList.remove('over'));
 }
 
+// ---------- 客户端 / 服务端标签 ----------
+const SIDE_LABEL = { client: '客户端', server: '服务端', both: '两端都要', unknown: '看不出' };
+const SIDE_CLS = { client: 'sd-client', server: 'sd-server', both: 'sd-both', unknown: 'sd-unknown' };
+const SIDE_ORDER = ['client', 'server', 'both', 'unknown', 'auto'];
+let sideFilter = 'all';
+function sideKey(m) { return (m && m.side && SIDE_LABEL[m.side.side]) ? m.side.side : 'unknown'; }
+// 推断的标签在末尾加个 ? —— 别让人以为是板上钉钉的结论
+function sideBadge(m) {
+    if (!m || !m.side) return '';
+    const k = sideKey(m);
+    const txt = SIDE_LABEL[k] + (m.side.sure ? '' : '?');
+    const tip = (m.side.sure ? '有把握：' : '推断（把握不大）：') + (m.side.reason || '') +
+        (m.side.manual ? '\n\n（这是你手动改过的）' : '') +
+        '\n\n点这里换标签：客户端 → 服务端 → 两端都要 → 看不出 → 恢复自动判断';
+    return '<span class="sdb ' + SIDE_CLS[k] + (m.side.sure ? '' : ' guess') + '" data-sd="' + esc(m.id) + '" title="' + esc(tip) + '">' + esc(txt) + '</span>';
+}
+document.addEventListener('click', async (ev) => {
+    const el = ev.target && ev.target.closest ? ev.target.closest('[data-sd]') : null;
+    if (!el) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const id = el.getAttribute('data-sd');
+    const m = active.concat(idle).find(x => x.id === id);
+    if (!m) return;
+    const cur = sideKey(m);
+    // 已经手动改过的，下一次点击继续往下轮询；没改过的从当前值往后推
+    const next = SIDE_ORDER[(SIDE_ORDER.indexOf(cur) + 1) % SIDE_ORDER.length];
+    try {
+        const r = await fetch('/api/mods/side', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: id, value: next }) });
+        const d = await r.json();
+        if (!d.ok) { show('改标签失败：' + d.error, false); return; }
+        if (d.value === 'auto') { await load(true); show('「' + (m.zh || m.name) + '」已恢复自动判断', true); return; }
+        m.side = { side: d.value, sure: false, manual: true, reason: '你手动指定的' };
+        render();
+        show('「' + (m.zh || m.name) + '」已标为 ' + d.label + '（不满意再点一下可以继续换）', true);
+    } catch (e) { show('改标签失败：' + e.message, false); }
+});
+
 // 搜索：空格分隔多个关键词，全部命中才算匹配（AND）
 function tokens(){
     return query.trim().toLowerCase().split(/\s+/).filter(Boolean);
 }
 
 function matchMod(m, ts){
+    if (sideFilter !== 'all' && sideKey(m) !== sideFilter) return false;
     if (!ts.length) return true;
     const hay = [m.name, m.zh, m.cat, m.desc, m.id, m.modversion]
         .filter(Boolean).join(' ').toLowerCase();
@@ -645,14 +696,16 @@ function render(){
     // 序号仍用原始数组下标，这样搜索状态下也能看出它在真实加载顺序里的位置
     active.forEach((m, i) => { if (matchMod(m, ts)) { a.appendChild(makeItem(m, i, true)); na++; } });
     idle.forEach((m, i) => { if (matchMod(m, ts)) { b.appendChild(makeItem(m, i, false)); nb++; } });
-    if (!active.length && !ts.length) a.innerHTML = '<li class="empty">左栏空着：在右栏点「启用」，或点「一键启用全部」</li>';
-    else if (ts.length && !na) a.innerHTML = '<li class="empty">左栏没有匹配「' + esc(query) + '」的 mod</li>';
-    if (!idle.length && !ts.length) b.innerHTML = '<li class="empty">右栏空着：所有 mod 都已启用</li>';
-    else if (ts.length && !nb) b.innerHTML = '<li class="empty">右栏没有匹配「' + esc(query) + '」的 mod</li>';
+    const f = ts.length || sideFilter !== 'all';
+    const what = ts.length ? ('匹配「' + esc(query) + '」且标签是「' + SIDE_LABEL[sideFilter] + '」') : ('标签是「' + SIDE_LABEL[sideFilter] + '」');
+    if (!active.length && !f) a.innerHTML = '<li class="empty">左栏空着：在右栏点「启用」，或点「一键启用全部」</li>';
+    else if (f && !na) a.innerHTML = '<li class="empty">左栏没有' + what + '的 mod</li>';
+    if (!idle.length && !f) b.innerHTML = '<li class="empty">右栏空着：所有 mod 都已启用</li>';
+    else if (f && !nb) b.innerHTML = '<li class="empty">右栏没有' + what + '的 mod</li>';
     document.getElementById('ca').textContent =
-        ts.length ? (na + ' / ' + active.length + ' 个') : (active.length + ' 个');
+        f ? (na + ' / ' + active.length + ' 个') : (active.length + ' 个');
     document.getElementById('ci').textContent =
-        ts.length ? (nb + ' / ' + idle.length + ' 个') : (idle.length + ' 个');
+        f ? (nb + ' / ' + idle.length + ' 个') : (idle.length + ' 个');
     const actBytes = active.reduce((s, m) => s + (m.sizeBytes || 0), 0);
     document.getElementById('stat').textContent = (ts.length
         ? '匹配 ' + (na + nb) + ' / 共 ' + (active.length + idle.length) + ' 个 mod'
@@ -1285,6 +1338,15 @@ function wireSyncResult(c, theirs) {
         } catch (e) { ap.disabled = false; show('对齐失败：' + e.message, false); }
     };
 }
+const SIDE_FILTER_ORDER = ['all', 'client', 'server', 'both', 'unknown'];
+document.getElementById('btnSideFilter').onclick = () => {
+    sideFilter = SIDE_FILTER_ORDER[(SIDE_FILTER_ORDER.indexOf(sideFilter) + 1) % SIDE_FILTER_ORDER.length];
+    const btn = document.getElementById('btnSideFilter');
+    btn.textContent = sideFilter === 'all' ? '全部' : ('只看：' + SIDE_LABEL[sideFilter]);
+    btn.classList.toggle('primary', sideFilter !== 'all');
+    render();
+    show(sideFilter === 'all' ? '已取消标签筛选' : ('只显示「' + SIDE_LABEL[sideFilter] + '」的 mod —— 再点这个按钮可以继续切换'), true);
+};
 document.getElementById('btnSubLink').onclick = async () => {
     const box = document.getElementById('linkBox');
     if (!box) return;
