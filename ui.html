@@ -295,6 +295,7 @@ body.light .idx{background:#f1f3f9;border-color:#dfe4ee}
       <button id="importZip" title="导入 zip 包（可含订阅链接）">导入zip包</button>
       <input type="file" id="zipFile" accept=".zip" style="display:none">
       <button id="btnSubLink" title="生成 / 导入创意工坊订阅链接">订阅链接</button>
+      <button id="btnSync" title="生成一段方案码发给队友，比对两边启用的是不是同一套 mod">方案同步（比对双方）</button>
       <button id="btnPresets" title="把当前这套启用组合存成方案，随时切回">mod方案存档</button>
       <div class="mlabel">存档与设置</div>
       <button id="btnSaves" title="游戏存档备份 / 还原">存档管理</button>
@@ -325,6 +326,7 @@ body.light .idx{background:#f1f3f9;border-color:#dfe4ee}
 <div class="report" id="histBox" style="display:none"></div>
 <div class="report" id="report"></div>
 <div class="report" id="jcBox" style="display:none"></div>
+<div class="report" id="syncBox" style="display:none"></div>
 
 <div class="paths" id="pathBox">
   <div class="ptitle">路径设置<span>找不到 mod / 游戏不在默认位置时，可以手动指定</span><span class="mtag" id="manualTag"></span></div>
@@ -1059,7 +1061,7 @@ function renderSubscribe(list){
     if (!list || !list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
     const rows = list.map(m => '<li><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=' + m.id + '" target="_blank">' + (m.name && m.name !== m.id ? m.name : ('创意工坊 ' + m.id)) + '</a></li>').join('');
     box.innerHTML = '<b>其中 ' + list.length + ' 个本机还没有（多半是 Steam 创意工坊物品）：</b><ul>' + rows + '</ul>' +
-        '<div class="pbtns"><button id="subSteam" class="primary">用 Steam 订阅这 ' + list.length + ' 个</button>' +
+        '<div class="pbtns"><button id="subSteam" class="primary">用 Steam 客户端订阅这 ' + list.length + ' 个</button>' +
         '<button id="subWeb">在网页里订阅</button><button id="subClose">关闭</button>' +
         '<span class="hint">订阅后 Steam 会自动下载，再点上面的「扫描路径」就能看到并启用了</span></div>';
     box.style.display = 'block';
@@ -1153,6 +1155,136 @@ async function presetRefresh(){
         };
     });
 }
+document.getElementById('btnSync').onclick = async () => {
+    const box = document.getElementById('syncBox');
+    if (!box) return;
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+    box.innerHTML = '<h3>生成中...</h3>'; box.style.display = 'block';
+    try {
+        const r = await fetch('/api/sync/make', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+        const d = await r.json();
+        if (!d.ok) { box.style.display = 'none'; show('生成失败：' + d.error, false); return; }
+        const localNote = d.local
+            ? '<div class="hint" style="margin-top:6px">注意：这套里有 <b style="color:#fcd34d">' + d.local + ' 个本地 mod</b>，Steam 不会替你同步给对方 —— 对方即使订阅完也仍然缺这 ' + d.local + ' 个，需要你用「导出mod文件」把文件发给他装好。</div>'
+            : '';
+        box.innerHTML = '<h3>mod 方案同步<span style="color:#9ca3af;font-weight:400;font-size:12px"> 两边启用同一套才不会在开局那一下掉线</span></h3>' +
+            '<div><b>① 我这套方案（' + d.count + ' 个' + (d.kb ? ('，约 ' + d.kb + ' KB') : '') + '）</b> —— 复制下面这段，发到群里或私聊给对方：</div>' +
+            '<textarea id="syncMine" readonly rows="4" style="width:100%;margin-top:6px;background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;border-radius:9px;padding:8px 10px;font-size:12px;font-family:Consolas,monospace;word-break:break-all"></textarea>' +
+            '<div class="pbtns">' +
+            '<button id="syncCopy" class="primary">复制我的方案</button>' +
+            '<button id="syncFile">另存为文件</button>' +
+            '</div>' +
+            localNote +
+            '<div style="margin-top:14px"><b>② 把对方发来的方案粘进来</b> —— 然后点比对，就能看出两边差在哪：</div>' +
+            '<textarea id="syncTheirs" rows="4" placeholder="在这里粘贴对方发给你的那串方案码（BSYNC1. 开头的一整段），点下面的「比对两套方案」" style="width:100%;margin-top:6px;background:#0f1626;color:#e6e9ef;border:1px solid #2a3346;border-radius:9px;padding:8px 10px;font-size:12px;font-family:Consolas,monospace;word-break:break-all"></textarea>' +
+            '<div class="pbtns">' +
+            '<button id="syncCmp" class="primary">比对两套方案</button>' +
+            '<button id="syncClose">关闭</button>' +
+            '</div>' +
+            '<div id="syncRes" style="margin-top:10px"></div>';
+        const mine = document.getElementById('syncMine');
+        mine.value = d.code;
+        document.getElementById('syncCopy').onclick = async () => {
+            mine.select();
+            try { await navigator.clipboard.writeText(mine.value); show('已复制我的方案，粘贴到聊天窗口发给对方即可', true); }
+            catch (e) { document.execCommand('copy'); show('已复制（若没生效请手动 Ctrl+C）', true); }
+        };
+        document.getElementById('syncFile').onclick = () => {
+            if (d.file) { show('已存到导出文件夹：' + d.file + '，把这个 txt 文件发给对方也行', true); }
+            else show('没能写成文件（导出文件夹不可写），请用上面的「复制我的方案」', false);
+        };
+        document.getElementById('syncClose').onclick = () => { box.style.display = 'none'; };
+        document.getElementById('syncCmp').onclick = async () => {
+            const theirs = String(document.getElementById('syncTheirs').value || '').trim();
+            const res = document.getElementById('syncRes');
+            if (!theirs) { show('先把对方发给你的方案码粘贴进去', false); return; }
+            res.innerHTML = '<div class="hint">比对中…</div>';
+            try {
+                const rr = await fetch('/api/sync/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: theirs }) });
+                const c = await rr.json();
+                if (!c.ok) { res.innerHTML = '<div class="bad">比对失败：' + esc(c.error) + '</div>'; show('比对失败：' + c.error, false); return; }
+                res.innerHTML = syncResultHtml(c);
+                wireSyncResult(c, theirs);
+            } catch (e) { res.innerHTML = '<div class="bad">比对出错：' + esc(e.message) + '</div>'; }
+        };
+    } catch (e) { box.style.display = 'none'; show('打开失败：' + e.message, false); }
+};
+
+// esc() 和 load() 都复用页面里已有的实现，这里不重复定义（重名会覆盖掉原来的）
+
+function syncResultHtml(c) {
+    if (c.same) {
+        return '<div style="padding:10px 12px;border-radius:10px;background:#10261a;border:1px solid #2f6b45">' +
+            '<b style="color:#86efac">✓ 两边完全一致</b> —— 你和他启用的是同一套 ' + c.mine + ' 个 mod，顺序也一样，可以放心开局。</div>';
+    }
+    let h = '<div style="padding:10px 12px;border-radius:10px;background:#2a1a1a;border:1px solid #6b3b3b;margin-bottom:10px">' +
+        '<b style="color:#fca5a5">两边不一致</b> —— 我这边启用 ' + c.mine + ' 个，对方 ' + c.remote + ' 个。</div>';
+    if (c.missing && c.missing.length) {
+        h += '<div style="margin-top:8px"><b style="color:#fca5a5">你没有的 ' + c.missing.length + ' 个</b>（对方启用了、你这台电脑上根本没有）：</div><ul style="margin:4px 0 0 18px">';
+        c.missing.slice(0, 40).forEach(function (m) {
+            h += '<li>' + esc(m.name) + (m.ws ? '' : ' <b style="color:#fcd34d">（本地 mod，对方得把文件发给你）</b>') + '</li>';
+        });
+        h += '</ul>';
+    }
+    if (c.willEnable && c.willEnable.length) {
+        h += '<div style="margin-top:8px"><b style="color:#fcd34d">文件在本机但没启用的 ' + c.willEnable.length + ' 个</b>（点对齐会自动启用）：</div><ul style="margin:4px 0 0 18px">';
+        c.willEnable.slice(0, 40).forEach(function (m) { h += '<li>' + esc(m.name) + '</li>'; });
+        h += '</ul>';
+    }
+    if (c.extra && c.extra.length) {
+        h += '<div style="margin-top:8px"><b style="color:#fcd34d">你比对方多启用的 ' + c.extra.length + ' 个</b>（点对齐会自动停用）：</div><ul style="margin:4px 0 0 18px">';
+        c.extra.slice(0, 40).forEach(function (m) { h += '<li>' + esc(m.name) + '</li>'; });
+        h += '</ul>';
+    }
+    if (c.verDiff && c.verDiff.length) {
+        h += '<div style="margin-top:8px"><b style="color:#fcd34d">版本不同的 ' + c.verDiff.length + ' 个</b>（两边都有但版本不一样，容易出问题）：</div><ul style="margin:4px 0 0 18px">';
+        c.verDiff.slice(0, 20).forEach(function (m) { h += '<li>' + esc(m.name) + '：你 ' + esc(m.mine) + '，对方 ' + esc(m.remote) + '</li>'; });
+        h += '</ul>';
+    }
+    if (c.order && c.order.length) {
+        h += '<div style="margin-top:8px"><b style="color:#fcd34d">加载顺序不同 ' + c.order.length + ' 处</b>（不会掉线，但效果会和对方看到的不一样）：</div><ul style="margin:4px 0 0 18px">';
+        c.order.slice(0, 8).forEach(function (o) { h += '<li>' + esc(o.first) + ' 应该排在 ' + esc(o.second) + ' 之后</li>'; });
+        h += '</ul>';
+    }
+    var subCount = (c.missing || []).filter(function (m) { return m.ws; }).length;
+    h += '<div class="pbtns" style="margin-top:12px">';
+    if (subCount) h += '<button id="syncSub" class="primary">① 去 Steam 订阅我缺的（' + subCount + ' 个）</button>';
+    h += '<button id="syncApply"' + (subCount ? '' : ' class="primary"') + '>② 一键对齐本机（按对方这套启用+排序）</button>';
+    h += '</div>';
+    h += '<div class="hint" style="margin-top:6px">对齐会直接改你游戏里的启用配置（写前自动备份，可在「配置回滚」里还原）。订阅完记得先在 Steam 里等下载完成，再点对齐。</div>';
+    return h;
+}
+
+function wireSyncResult(c, theirs) {
+    const sub = document.getElementById('syncSub');
+    if (sub) sub.onclick = async () => {
+        try {
+            const r = await fetch('/api/sync/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: theirs }) });
+            const d = await r.json();
+            if (!d.ok) { show('订阅失败：' + d.error, false); return; }
+            show('已拉起 Steam 客户端：共 ' + d.count + ' 个，会分批慢慢弹（约 ' + d.seconds + ' 秒弹完），请在 Steam 弹窗里逐个点「订阅」。' +
+                (d.running === false ? '检测到 Steam 当前没运行，我先试着启动了它 —— 等它完全起来后没反应就再点一次。' : '') +
+                '下载完成后回来点「一键对齐本机」。', true);
+        } catch (e) { show('订阅失败：' + e.message, false); }
+    };
+    const ap = document.getElementById('syncApply');
+    if (ap) ap.onclick = async () => {
+        if (!confirm('按对方这套 mod 调整你本机：启用缺失的、停用多余的、并按对方的顺序排好。\n\n会改动游戏配置（改动前会自动备份，可在「配置回滚」里还原）。确定继续吗？')) return;
+        ap.disabled = true; ap.textContent = '对齐中...';
+        try {
+            const items = (c.items || []).map(function (m, i) { return { id: m.id, name: m.n || '', zh: m.n || '', order: i + 1 }; });
+            const r = await fetch('/api/joincheck/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: items }) });
+            const d = await r.json();
+            ap.disabled = false; ap.textContent = '② 一键对齐本机（按对方这套启用+排序）';
+            if (!d.ok) { show('对齐失败：' + d.error, false); return; }
+            let msg = '已对齐：启用 ' + d.enabled + ' 个，停用 ' + d.disabled + ' 个。重启游戏生效。';
+            if (d.missing && d.missing.length) msg += '还有 ' + d.missing.length + ' 个本机没有文件，先去 Steam 订阅下载完再点一次对齐。';
+            else msg += '全部到位 —— 现在和对方一致了。';
+            show(msg, true);
+            if (typeof load === 'function') await load();
+        } catch (e) { ap.disabled = false; show('对齐失败：' + e.message, false); }
+    };
+}
 document.getElementById('btnSubLink').onclick = async () => {
     const box = document.getElementById('linkBox');
     if (!box) return;
@@ -1180,7 +1312,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             '<button id="linkModeWeb">网页链接</button>' +
             '<button id="linkModeName">带 mod 名</button>' +
             '<button id="linkCopy" class="primary">复制</button>' +
-            '<button id="linkSteamAll">自己先订阅一遍</button>' +
+            '<button id="linkSteamAll" class="primary">用 Steam 客户端订阅这批</button>' +
             '<button id="linkHtml">打开订阅清单页面</button>' +
             '<button id="linkColl">做 Steam 合集（脚本一键加满）</button>' +
             '<button id="linkVerify">校验链接</button>' +
@@ -1188,7 +1320,7 @@ document.getElementById('btnSubLink').onclick = async () => {
             '<button id="linkWebSub">网页订阅脚本</button>' +
             '<button id="linkClose">关闭</button>' +
             '</div>' +
-            '<div class="hint" style="margin-top:6px">Steam 的协议一次只确认一个 mod；想让对方「一次订阅全部」，用「做 Steam 合集」——把 mod 加进合集后分享合集链接，对方点「订阅全部」即可。</div>' +
+            '<div class="hint" style="margin-top:6px">「Steam 链接 / 带 mod 名 / 用 Steam 客户端订阅这批 / 测试能否拉起 Steam」走的都是你电脑上的 <b>Steam 客户端</b>（steam:// 协议，会弹订阅确认窗），不是浏览器网页；「网页链接 / 打开订阅清单页面 / 网页订阅脚本」走的是浏览器。Steam 一次只确认一个 mod，所以会分批慢慢弹；想让对方一次订阅全部，用「做 Steam 合集」。</div>' +
             '<div class="hint">若对方打开链接看到「该物品不存在」：多半是短时间点了太多条被 Steam 限流（表现为各种报错页），隔 5~10 分钟再点就正常；社区网页访问不畅时也可以直接发导出文件，不依赖 Steam。</div>' +
             (d.html ? '<div class="hint">订阅清单页面：' + d.html + '</div>' : '');
         const ta = document.getElementById('linkText');

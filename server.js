@@ -1822,6 +1822,187 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // ---------- mod 方案同步 ----------
+    // 联机能不能进、进去会不会掉线，全看两边启用的是不是同一套 mod。
+    // 之前只能把检查页当文件发给对方，这里改成：生成一段可直接粘贴的短文本，
+    // 对方在自己的软件里粘进来就能比对，顺带把缺的一键订阅 / 一键对齐。
+    function syncReadVer(p) {
+        try { const t = fs.readFileSync(p, 'utf8'); return (/modversion="([^"]*)"/i.exec(t) || [, ''])[1]; }
+        catch (e) { return ''; }
+    }
+    function syncManifest() {
+        const P = getPaths();
+        const W = P.WORKSHOP || '', LM = P.LOCALMODS || '';
+        const data = buildData();
+        const items = (data.active || []).map(m => {
+            const id = String(m.id);
+            let ver = '';
+            if (W && fs.existsSync(path.join(W, id, 'filelist.xml'))) ver = syncReadVer(path.join(W, id, 'filelist.xml'));
+            else if (LM && fs.existsSync(path.join(LM, id, 'filelist.xml'))) ver = syncReadVer(path.join(LM, id, 'filelist.xml'));
+            return { id: id, n: m.zh || m.name || '', v: ver, w: __isWs(id) ? 1 : 0 };
+        });
+        return { app: 'BarotraumaModSorter', k: 'sync', v: 1, t: Date.now(), c: items.length, i: items };
+    }
+    // 明文 JSON 塞中文名后有五六 KB，聊天软件容易换行打断 —— 压一遍再编成纯 URL 安全字符
+    function syncEncode(obj) {
+        const json = JSON.stringify(obj);
+        try {
+            const zlib = require('zlib');
+            const z = zlib.deflateRawSync(Buffer.from(json, 'utf8'));
+            return 'BSYNC1.' + z.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        } catch (e) { return json; }
+    }
+    function syncNorm(o) {
+        let items = [];
+        if (Array.isArray(o)) items = o;
+        else items = o.items || o.i || o.active || o.list || [];
+        items = items.map(x => {
+            if (typeof x === 'string') { const s = String(x); return { id: s, n: '', v: '', w: __isWs(s) ? 1 : 0 }; }
+            const id = String(x.id != null ? x.id : '');
+            return { id: id, n: x.zh || x.n || x.name || '', v: x.ver || x.v || '', w: (x.ws === true || x.w === 1) ? 1 : 0 };
+        }).filter(x => x.id);
+        if (!items.length) throw new Error('这段方案里没有任何 mod');
+        return { c: items.length, i: items };
+    }
+    function syncDecode(text) {
+        const t = String(text || '').trim();
+        if (!t) throw new Error('内容是空的，把对方发给你的方案整段粘进来再点比对');
+        if (t.indexOf('BSYNC1.') === 0) {
+            try {
+                const zlib = require('zlib');
+                let b = t.slice(7).replace(/-/g, '+').replace(/_/g, '/');
+                while (b.length % 4) b += '=';
+                return syncNorm(JSON.parse(zlib.inflateRawSync(Buffer.from(b, 'base64')).toString('utf8')));
+            } catch (e) { throw new Error('方案码不完整 —— 多半是被聊天软件截断或中间插了换行。让对方重新生成、整段复制发来'); }
+        }
+        if (t[0] === '{' || t[0] === '[') {
+            try { return syncNorm(JSON.parse(t)); }
+            catch (e) { throw new Error('看不出这是个有效的 mod 方案：' + e.message); }
+        }
+        // 容错：别人手敲的一串 id 也认
+        const ids = (t.match(/\b\d{5,}\b/g) || []);
+        if (!ids.length) throw new Error('没认出这是 mod 方案 —— 请把对方发的方案码整段粘进来');
+        return { c: ids.length, i: ids.map(id => ({ id: id, n: '', v: '', w: 1 })) };
+    }
+    // 比对本机 vs 对方：缺失（本机压根没有）/ 需启用 / 多余 / 顺序不同 / 版本不同
+    function syncCompare(remote) {
+        const P = getPaths();
+        const W = P.WORKSHOP || '', LM = P.LOCALMODS || '';
+        const data = buildData();
+        const byId = {};
+        (data.active || []).concat(data.idle || []).forEach(m => { byId[String(m.id)] = m; });
+        const verOf = id => {
+            if (W && fs.existsSync(path.join(W, id, 'filelist.xml'))) return syncReadVer(path.join(W, id, 'filelist.xml'));
+            if (LM && fs.existsSync(path.join(LM, id, 'filelist.xml'))) return syncReadVer(path.join(LM, id, 'filelist.xml'));
+            return '';
+        };
+        const zhOf = (id, fallback) => {
+            const m = byId[id];
+            return (fallback) || (m && (m.zh || m.name)) || id;
+        };
+        const mine = (data.active || []).map(m => String(m.id));
+        const mineSet = {}; mine.forEach(id => { mineSet[id] = 1; });
+        const rIds = remote.i.map(x => x.id);
+        const rSet = {}; rIds.forEach(id => { rSet[id] = 1; });
+        const pos = {}; rIds.forEach((id, i) => { if (pos[id] == null) pos[id] = i; });
+
+        const missing = [], willEnable = [], verDiff = [];
+        remote.i.forEach(x => {
+            if (!mineSet[x.id]) {
+                // 本机有没有这个 mod 的文件，决定是「点一下启用」还是「得先去订阅」
+                if (byId[x.id]) willEnable.push({ id: x.id, name: zhOf(x.id, x.n) });
+                else missing.push({ id: x.id, name: x.n || x.id, ws: !!x.w });
+            } else {
+                const mv = verOf(x.id);
+                if (x.v && mv && x.v !== mv) verDiff.push({ id: x.id, name: x.n || zhOf(x.id, ''), mine: mv, remote: x.v });
+            }
+        });
+        const extra = (data.active || []).filter(m => !rSet[String(m.id)])
+            .map(m => ({ id: String(m.id), name: m.zh || m.name || String(m.id) }));
+        const common = mine.filter(id => pos[id] != null);
+        const order = [];
+        for (let i = 1; i < common.length; i++) {
+            if (pos[common[i]] < pos[common[i - 1]]) {
+                order.push({ first: zhOf(common[i - 1], ''), second: zhOf(common[i], '') });
+            }
+        }
+        const same = !missing.length && !willEnable.length && !extra.length && !verDiff.length && !order.length;
+        return {
+            same: same, mine: mine.length, remote: remote.i.length,
+            missing: missing, willEnable: willEnable, extra: extra, verDiff: verDiff, order: order,
+            remoteLocalMods: remote.i.filter(x => !x.w).length,
+        };
+    }
+
+    // 生成自己这套方案的短码（同时存一份到导出文件夹，方便直接发文件）
+    if (url === '/api/sync/make' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = parseBody(raw);
+                const man = syncManifest();
+                if (!man.c) throw new Error('当前没有启用任何 mod，先保存一次再生成方案');
+                const code = syncEncode(man);
+                let file = '';
+                try {
+                    const folder = resolveShareFolder(b.folder);
+                    fs.mkdirSync(folder, { recursive: true });
+                    file = path.join(folder, '我的mod方案.txt');
+                    fs.writeFileSync(file, code + '\r\n', 'utf8');
+                } catch (e) { }
+                send(res, 200, JSON.stringify({
+                    ok: true, code: code, count: man.c,
+                    local: man.i.filter(x => !x.w).length,
+                    kb: Math.ceil(code.length / 1024), file: file,
+                }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    // 把对方发来的方案码和本机比对
+    if (url === '/api/sync/compare' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = parseBody(raw);
+                const remote = syncDecode(b.text);
+                const cmp = syncCompare(remote);
+                send(res, 200, JSON.stringify(Object.assign({ ok: true, items: remote.i }, cmp)));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
+    // 比对完发现本机没有的工坊 mod —— 直接拉起 Steam 客户端逐个弹订阅确认
+    if (url === '/api/sync/subscribe' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            try {
+                const b = parseBody(raw);
+                const remote = syncDecode(b.text);
+                const cmp = syncCompare(remote);
+                const ids = [];
+                cmp.missing.forEach(x => { if (x.ws && !ids.includes(x.id)) ids.push(x.id); });
+                if (!ids.length) throw new Error('没有需要从 Steam 订阅的（缺的都是本地 mod，只能让对方把文件发给你）');
+                const SIZE = 8, GAP = 800, CHUNK_GAP = 6000;
+                ids.forEach((id, i) => {
+                    const wait = (i % SIZE) * GAP + Math.floor(i / SIZE) * CHUNK_GAP;
+                    setTimeout(() => { openSteamUrl('steam://subscribe/' + id); }, wait);
+                });
+                send(res, 200, JSON.stringify({
+                    ok: true, count: ids.length,
+                    seconds: Math.round(((Math.floor((ids.length - 1) / SIZE) * CHUNK_GAP + ((ids.length - 1) % SIZE) * GAP) / 1000)),
+                    running: steamRunning(),
+                }));
+            } catch (e) { send(res, 500, JSON.stringify({ ok: false, error: e.message })); }
+        });
+        return;
+    }
+
     if (url === '/api/paths/rescan' && req.method === 'POST') {
         try {
             const P = refreshPaths();
