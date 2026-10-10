@@ -386,15 +386,22 @@ let query = '';   // 搜索关键词
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 // 搜索命中高亮（先转义，再用控制字符做标记，避免关键词命中到标签本身）
+let __hlCache = { q: null, res: null };
+function hlRes(){
+    if (__hlCache.q !== query) {
+        __hlCache = {
+            q: query,
+            res: tokens().map(w => new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'))
+        };
+    }
+    return __hlCache.res;
+}
 function hlEsc(s){
     const t = esc(s);
-    const ts = tokens();
-    if (!ts.length) return t;
+    const res = hlRes();
+    if (!res.length) return t;
     let out = t;
-    ts.forEach(w => {
-        const re = new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-        out = out.replace(re, '\u0001$&\u0002');
-    });
+    res.forEach(re => { out = out.replace(re, '\u0001$&\u0002'); });
     return out.replace(/\u0001/g, '<span class="hit">').replace(/\u0002/g, '</span>');
 }
 // 当前过滤后可见的列表（拖拽 / 上下移都按可见顺序走，避免搜索时“点了没反应”）
@@ -588,7 +595,7 @@ function makeItem(m, i, isActive){
 
     li.ondragstart = () => { dragFrom = isActive ? 'a' : 'i'; dragId = m.id; li.classList.add('drag'); };
     li.ondragend = () => { li.classList.remove('drag'); clearOver(); };
-    li.ondragover = e => { e.preventDefault(); clearOver(); li.classList.add('over'); };
+    li.ondragover = e => { e.preventDefault(); clearOver(); __overEl = li; li.classList.add('over'); };
     li.ondrop = e => {
         e.preventDefault();
         const side = isActive ? 'a' : 'i';
@@ -612,7 +619,10 @@ function makeItem(m, i, isActive){
     return li;
 }
 
+// 拖拽经过时每几十毫秒触发一次：记住上一个高亮的元素，别每次把整个文档翻一遍
+let __overEl = null;
 function clearOver(){
+    if (__overEl) { __overEl.classList.remove('over'); __overEl = null; return; }
     document.querySelectorAll('li.over').forEach(x => x.classList.remove('over'));
 }
 
@@ -661,12 +671,16 @@ function tokens(){
 function matchMod(m, ts){
     if (sideFilter !== 'all' && sideKey(m) !== sideFilter) return false;
     if (!ts.length) return true;
-    const hay = [m.name, m.zh, m.cat, m.desc, m.id, m.modversion]
-        .filter(Boolean).join(' ').toLowerCase();
-    return ts.every(w => hay.indexOf(w) >= 0);
+    // 搜索用的整串只在第一次拼：每次 render 上千次比对都用同一份
+    if (m.__hay === undefined) {
+        m.__hay = [m.name, m.zh, m.cat, m.desc, m.id, m.modversion]
+            .filter(Boolean).join(' ').toLowerCase();
+    }
+    return ts.every(w => m.__hay.indexOf(w) >= 0);
 }
 
 // 找出某 mod 声明的前置里，还没启用、且本机 mod 库里有的那些
+// （试过把结果整批缓存起来，但"算缓存签名"比直接扫一遍还贵，实测更慢，所以保持直算）
 function missingDeps(m) {
     const need = (m.deps || []).filter(d => !active.some(x => x.name === d.name || x.id === d.id));
     return need.filter(d => active.some(x => x.id === d.id) === false && (idle.some(x => x.id === d.id) || active.some(x => x.id === d.id)));
@@ -692,9 +706,14 @@ function render(){
     a.innerHTML = ''; b.innerHTML = '';
     const ts = tokens();
     let na = 0, nb = 0;
+    // 先装进 DocumentFragment 再一次塞进页面：一条条 append 会让浏览器反复重排
+    const fa = document.createDocumentFragment();
+    const fb = document.createDocumentFragment();
     // 序号仍用原始数组下标，这样搜索状态下也能看出它在真实加载顺序里的位置
-    active.forEach((m, i) => { if (matchMod(m, ts)) { a.appendChild(makeItem(m, i, true)); na++; } });
-    idle.forEach((m, i) => { if (matchMod(m, ts)) { b.appendChild(makeItem(m, i, false)); nb++; } });
+    active.forEach((m, i) => { if (matchMod(m, ts)) { fa.appendChild(makeItem(m, i, true)); na++; } });
+    idle.forEach((m, i) => { if (matchMod(m, ts)) { fb.appendChild(makeItem(m, i, false)); nb++; } });
+    a.appendChild(fa);
+    b.appendChild(fb);
     const f = ts.length || sideFilter !== 'all';
     const what = ts.length ? ('匹配「' + esc(query) + '」且标签是「' + SIDE_LABEL[sideFilter] + '」') : ('标签是「' + SIDE_LABEL[sideFilter] + '」');
     if (!active.length && !f) a.innerHTML = '<li class="empty">左栏空着：在右栏点「启用」，或点「一键启用全部」</li>';
@@ -711,7 +730,11 @@ function render(){
         : '共 ' + (active.length + idle.length) + ' 个 mod') + (actBytes ? (' · 已启用 ' + fmtMb(actBytes)) : '');
     const box = document.getElementById('sBox');
     if (box) box.classList.toggle('has', ts.length > 0);
-    if (typeof fitCols === 'function') fitCols();
+    // 列高要读真实尺寸，放下一帧再算：刚插完上百个节点就同步量会逼浏览器立刻重排
+    if (typeof fitCols === 'function') {
+        if (window.requestAnimationFrame) window.requestAnimationFrame(fitCols);
+        else fitCols();
+    }
 }
 
 function show(text, ok){
