@@ -1110,7 +1110,75 @@ function openAppWindow(u) {
     try { exec(`cmd /c start "" "${u}"`); return true; } catch (e) { return false; }
 }
 
-﻿// 给 PowerShell 命令里的路径加单引号（路径里的 ' 转义成两个）
+﻿
+// ---------- 关窗口即保存 + 退出前整理内存 ----------
+// 关掉窗口时页面会请求 /api/exit-save：先写配置，再延时退出。
+// 延时是为了容错：如果只是刷新页面，新页面会立刻再来请求，把这次退出撤销掉。
+let __exitTimer = null;
+function cancelAutoExit() {
+    if (__exitTimer) { clearTimeout(__exitTimer); __exitTimer = null; return true; }
+    return false;
+}
+function scheduleAutoExit(ms) {
+    cancelAutoExit();
+    __exitTimer = setTimeout(() => {
+        try { server.close(); } catch (e) { }
+        process.exit(0);
+    }, ms);
+}
+function rssMB() { try { return Math.round(process.memoryUsage().rss / 1048576); } catch (e) { return 0; } }
+
+// 把本进程工作集里暂时不用的内存页还给系统（只动自己这个后台进程，不碰别人的）
+// 顺带量一下整理前后的工作集，好给界面显示"释放了多少"
+function trimOwnWorkingSet(cb) {
+    const done = (r) => { try { cb && cb(r); } catch (e) { } };
+    let f = '';
+    try {
+        f = path.join(os.tmpdir(), 'bms_trim_' + process.pid + '.ps1');
+        const ps = [
+            '$ErrorActionPreference = "SilentlyContinue"',
+            '$p = Get-Process -Id ' + process.pid,
+            'if (-not $p) { exit 0 }',
+            '$b = $p.WorkingSet64',
+            'Add-Type -Namespace BmsMem -Name T -MemberDefinition \'[DllImport("psapi.dll")] public static extern bool EmptyWorkingSet(System.IntPtr h);\'',
+            '[BmsMem.T]::EmptyWorkingSet($p.Handle) | Out-Null',
+            '$p.Refresh()',
+            'Write-Output ("" + $b + " " + $p.WorkingSet64)'
+        ].join('; ');
+        fs.writeFileSync(f, ps, 'utf8');
+        exec('powershell -NoProfile -ExecutionPolicy Bypass -File "' + f + '"', { timeout: 15000, windowsHide: true }, (e, out) => {
+            try { fs.unlinkSync(f); } catch (x) { }
+            const m = String(out || '').match(/(\d+)\s+(\d+)/);
+            if (!m) return done({ ok: false });
+            done({ ok: true, fromMB: Math.round(parseInt(m[1], 10) / 1048576), toMB: Math.round(parseInt(m[2], 10) / 1048576) });
+        });
+    } catch (e) {
+        try { if (f) fs.unlinkSync(f); } catch (x) { }
+        done({ ok: false });
+    }
+}
+
+// 启动游戏前调用：清缓存 -> 能 GC 就 GC -> 把工作集交还系统
+function memOptimize() {
+    const before = rssMB();
+    try { __dataCache = { key: '', data: null }; } catch (e) { }
+    let gcRan = false;
+    if (typeof global.gc === 'function') {
+        try { global.gc(); global.gc(); gcRan = true; } catch (e) { }
+    }
+    return new Promise((res) => {
+        trimOwnWorkingSet((t) => {
+            res({
+                ok: true, gcRan: gcRan, rssMB: rssMB(), rssBeforeMB: before,
+                wsFromMB: t && t.ok ? t.fromMB : 0,
+                wsToMB: t && t.ok ? t.toMB : 0,
+                freedMB: t && t.ok ? Math.max(0, t.fromMB - t.toMB) : 0
+            });
+        });
+    });
+}
+
+// 给 PowerShell 命令里的路径加单引号（路径里的 ' 转义成两个）
 function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
 
 // ---------- 共享文件夹（导出/导入 mod 目录）----------
@@ -1235,6 +1303,8 @@ function copyDir(src, dest) {
 
 const server = http.createServer((req, res) => {
     const url = req.url.split('?')[0];
+    // 页面又活过来了（刷新 / 重新打开）：撤销关窗口时排的退出，免得后台服务被误关
+    if (url !== '/api/exit-save' && url !== '/api/quit') cancelAutoExit();
     const clen = parseInt(req.headers['content-length'] || '0', 10);
     if (clen > MAX_BODY) {
         return send(res, 413, JSON.stringify({ ok: false, error: '请求体过大（上限 ' + Math.round(MAX_BODY / 1048576) + ' MB），已拒绝' }));
@@ -2214,7 +2284,8 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-﻿    // 给 PowerShell 命令里的路径加单引号（路径里的 ' 转义成两个）
+﻿    
+// 给 PowerShell 命令里的路径加单引号（路径里的 ' 转义成两个）
 function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
 
 // ---------- 共享文件夹（导出/导入 mod 目录）----------
@@ -2916,6 +2987,41 @@ function Q_(p) { return "'" + String(p).split("'").join("''") + "'"; }
     }
 
     // 界面「退出」按钮调用：干净关闭服务（配合隐藏启动脚本，像正常软件一样退出）
+    // 关窗口（叉掉）时调用：先保存当前列表，再延时退出后台服务
+    if (url === '/api/exit-save' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', d => { raw += d; });
+        req.on('end', () => {
+            let saved = 0, note = '';
+            try {
+                const b = parseBody(raw);
+                const list = Array.isArray(b.list) ? b.list : [];
+                try { saved = save(list, false); }
+                catch (e1) {
+                    // 只有"列表里有东西、只是全被停用"才按空着写一次；
+                    // 列表本身是空的（页面没加载完等异常）绝不能写，否则会把配置清空
+                    if (list.length > 0) {
+                        try { saved = save(list, true); note = '（全部停用，已按空着写）'; }
+                        catch (e2) { note = '保存失败：' + e2.message; }
+                    } else {
+                        note = '没读到 mod 列表，未动游戏配置';
+                    }
+                }
+                __dataCache = { key: '', data: null };
+            } catch (e) { note = '保存失败：' + e.message; }
+            send(res, 200, JSON.stringify({ ok: true, saved: saved, note: note }));
+            scheduleAutoExit(3500);   // 留 3.5 秒：刷新页面会把它撤销
+        });
+        return;
+    }
+
+    // 启动游戏前整理内存：清缓存 + GC + 把工作集交还系统
+    if (url === '/api/memory/optimize' && req.method === 'POST') {
+        memOptimize().then((r) => send(res, 200, JSON.stringify(r)))
+            .catch((e) => send(res, 200, JSON.stringify({ ok: false, error: e.message })));
+        return;
+    }
+
     if (url === '/api/quit') {
         send(res, 200, JSON.stringify({ ok: true }));
         setTimeout(() => process.exit(0), 150);

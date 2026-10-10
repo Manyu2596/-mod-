@@ -290,7 +290,7 @@ body.light .idx{background:#f1f3f9;border-color:#dfe4ee}
   <span class="grp"><span class="glabel">主操作</span>
     <button class="primary" id="save" title="把左栏顺序写入游戏配置（Ctrl+S）">保存到游戏</button>
     <button id="resort" title="按分层规则重新排一遍左栏">重新排序</button>
-    <button id="test" title="直接启动游戏（保存后）">启动游戏</button>
+    <button id="test" title="先整理内存，再保存配置并启动游戏；游戏起来后本管理器会自动关闭（可取消）">启动游戏</button>
     <button id="joinCheck" title="检查重复 mod、缺前置、版本不符、多人同步">联机自检</button>
   </span>
   <span class="grp"><span class="glabel">体检</span>
@@ -326,7 +326,6 @@ body.light .idx{background:#f1f3f9;border-color:#dfe4ee}
     <button id="sclear" title="清除搜索（Esc）">×</button>
   </span>
   <span class="hint" id="stat"></span>
-  <button id="quit" class="quit" title="先保存到游戏，再关闭程序并退出后台服务">保存退出</button>
 </div>
 </div>
 
@@ -989,8 +988,20 @@ function renderReport(rp){
 document.getElementById('test').onclick = async () => {
     const btn = document.getElementById('test');
     btn.disabled = true;
-    btn.textContent = '启动中...';
+    btn.textContent = '整理内存并启动中...';
+    let memNote = '';
     try {
+        // 先把这软件自己占的内存腾一腾，再拉游戏，别跟游戏抢内存
+        try {
+            const rm = await fetch('/api/memory/optimize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const dm = await rm.json();
+            if (dm && dm.ok) memNote = dm.freedMB > 0 ? ('已释放 ' + dm.freedMB + ' MB 内存') : '内存已整理';
+        } catch (e) { /* 整理失败不影响启动 */ }
+        btn.textContent = '启动中...';
         const list = active.map(m => ({ id: m.id, enabled: true }))
             .concat(idle.map(m => ({ id: m.id, enabled: false })));
         const r = await fetch('/api/test', {
@@ -1002,6 +1013,8 @@ document.getElementById('test').onclick = async () => {
         if (d.ok) {
             renderReport(d.report);
             show(d.launched ? '已保存配置并启动游戏，进游戏看看效果吧～' : '已保存，但未能自动启动游戏（请手动从 Steam 打开）', d.launched);
+            // 真拉起来了就自动关自己，把内存全让给游戏
+            if (d.launched) autoCloseAfterLaunch(memNote);
         } else {
             show('测试失败：' + d.error, false);
         }
@@ -1889,29 +1902,66 @@ document.getElementById('pClear').onclick = async () => {
 
 
 
-// 「保存退出」：先写入游戏配置，成功后再关掉后台服务并关闭窗口。
-// 保存失败时中止退出，避免丢掉这次的改动。
-document.getElementById('quit').onclick = async () => {
-    const btn = document.getElementById('quit');
-    btn.disabled = true;
-    btn.textContent = '保存中...';
-    let ok = false;
+// ---------- 直接点窗口的叉 = 保存并退出 ----------
+// 「保存退出」按钮去掉了：关窗口这一下会把当前列表写进游戏配置，再关掉后台服务。
+// 刷新页面不会把服务误关：新页面一加载就会请求接口，把待退出撤销掉。
+let __selfClosing = false;      // 自己的代码关窗口时，不再重复保存一次
+window.addEventListener('beforeunload', function () {
+    if (__selfClosing) return;
+    __selfClosing = true;
     try {
-        const d = await saveNow();
-        ok = !!(d && d.ok);
-        if (!ok) show('保存失败，已取消退出：' + ((d && d.error) || '未知错误'), false);
-    } catch (e) {
-        show('保存失败，已取消退出：' + e.message, false);
-    }
-    if (!ok) {
-        btn.disabled = false;
-        btn.textContent = '保存退出';
-        return;
-    }
-    btn.textContent = '正在退出...';
-    try { await fetch('/api/quit'); } catch (e) { /* 服务可能已关闭 */ }
-    window.close();
-};
+        const list = active.map(m => ({ id: m.id, enabled: true }))
+            .concat(idle.map(m => ({ id: m.id, enabled: false })));
+        const body = JSON.stringify({ list: list });
+        // 同步发：关窗口的瞬间也保证发得出去
+        try {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/exit-save', false);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.send(body);
+        } catch (e) {
+            try { navigator.sendBeacon('/api/exit-save', new Blob([body], { type: 'application/json' })); }
+            catch (e2) { /* 兜底也不成就算了，下次打开会重新读 */ }
+        }
+    } catch (e) { }
+});
+
+// 启动游戏后自动关掉管理器：这软件占内存，让位给游戏
+function autoCloseAfterLaunch(note) {
+    const box = document.getElementById('report');
+    if (!box) return;
+    let left = 8;
+    const bar = document.createElement('div');
+    bar.id = 'autoCloseBar';
+    bar.style.cssText = 'margin-top:10px;padding:8px 10px;border-radius:8px;background:#101a2e;border:1px solid #2a3a55;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+    const tip = document.createElement('span');
+    tip.style.cssText = 'color:#8b94a8';
+    tip.textContent = (note ? note + '，' : '') + '游戏已启动，';
+    const num = document.createElement('b');
+    num.style.cssText = 'color:#e6edf7';
+    const cb = document.createElement('button');
+    cb.className = 'ghost';
+    cb.textContent = '先不关';
+    bar.appendChild(tip);
+    bar.appendChild(num);
+    bar.appendChild(cb);
+    box.appendChild(bar);
+    num.textContent = left + ' 秒后自动关闭管理器，把内存让给游戏…';
+    const timer = setInterval(function () {
+        left -= 1;
+        if (left > 0) { num.textContent = left + ' 秒后自动关闭管理器，把内存让给游戏…'; return; }
+        clearInterval(timer);
+        num.textContent = '正在关闭…';
+        __selfClosing = true;
+        try { fetch('/api/quit'); } catch (e) { /* 服务可能已关 */ }
+        setTimeout(function () { try { window.close(); } catch (e) { } }, 400);
+    }, 1000);
+    cb.onclick = function () {
+        clearInterval(timer);
+        bar.remove();
+        show('已取消：管理器继续运行', true);
+    };
+}
 
 
 // ---------- 「更多」菜单 ----------
